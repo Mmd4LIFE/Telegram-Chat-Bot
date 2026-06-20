@@ -1,6 +1,7 @@
 """Main bot message & callback handlers."""
 from __future__ import annotations
 
+import html
 import logging
 import os
 import tempfile
@@ -8,10 +9,11 @@ import tempfile
 from aiogram import F, Router
 from aiogram.enums import ChatAction
 from aiogram.filters import Command, CommandStart
-from aiogram.types import CallbackQuery, Contact, Message as TgMessage
+from aiogram.types import BufferedInputFile, CallbackQuery, Contact, Message as TgMessage
 
 from app.bot import keyboards as kb
 from app.bot.bot import bot, send_long
+from app.bot.formatting import to_telegram_html
 from app.bot.texts import BANNED, HELP, WELCOME
 from app.database import SessionLocal
 from app.services import crud
@@ -188,7 +190,7 @@ async def on_photo(message: TgMessage):
             prompt_tokens=result.prompt_tokens, completion_tokens=result.completion_tokens,
             total_tokens=result.total_tokens,
         )
-    await send_long(message.chat.id, result.text, reply_markup=kb.main_menu(user.is_admin))
+    await send_long(message.chat.id, to_telegram_html(result.text), reply_markup=kb.main_menu(user.is_admin))
 
 
 @router.message(F.voice | F.audio)
@@ -240,15 +242,21 @@ async def _handle_chat(message: TgMessage, text: str, user_prefix: str = ""):
     if model == IMAGE_MODEL:
         await bot.send_chat_action(message.chat.id, ChatAction.UPLOAD_PHOTO)
         try:
-            url = await generate_image(text)
+            image = await generate_image(text)
         except Exception as e:  # noqa: BLE001
             log.exception("image gen error")
             return await message.answer(f"⚠️ Image generation failed: {e}")
+
+        photo = image.url if image.kind == "url" else BufferedInputFile(image.data, "image.png")
+        caption = f"🎨 <i>{html.escape(text[:200])}</i>"
+        stored = image.url or "[generated image]"
         async with SessionLocal() as session:
             user = await crud.get_or_create_user(session, message.from_user)
             await crud.save_message(session, user, "user", f"{user_prefix}{text}", content_type="text")
-            await crud.save_message(session, user, "assistant", url, content_type="image", model=IMAGE_MODEL)
-        return await message.answer_photo(url, caption=f"🎨 <i>{text[:200]}</i>")
+            await crud.save_message(
+                session, user, "assistant", stored, content_type="image", model=image.model
+            )
+        return await message.answer_photo(photo, caption=caption)
 
     # Chat mode
     await bot.send_chat_action(message.chat.id, ChatAction.TYPING)
@@ -273,7 +281,7 @@ async def _handle_chat(message: TgMessage, text: str, user_prefix: str = ""):
             prompt_tokens=result.prompt_tokens, completion_tokens=result.completion_tokens,
             total_tokens=result.total_tokens,
         )
-    await send_long(message.chat.id, result.text, reply_markup=kb.main_menu(is_admin))
+    await send_long(message.chat.id, to_telegram_html(result.text), reply_markup=kb.main_menu(is_admin))
 
 
 def _admin_id() -> int:

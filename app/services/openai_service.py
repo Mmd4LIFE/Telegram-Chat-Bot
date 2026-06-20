@@ -1,6 +1,7 @@
 """Wrapper around the OpenAI API supporting chat, vision, image gen and voice."""
 from __future__ import annotations
 
+import base64
 import logging
 from dataclasses import dataclass
 
@@ -33,7 +34,11 @@ CHAT_MODELS: list[ChatModel] = [
     ChatModel("gpt-3.5-turbo", "💨 GPT-3.5 Turbo", "Lightweight & very fast"),
 ]
 
+# `IMAGE_MODEL` is the public selector id used in keyboards/state. Actual
+# generation tries several real model ids in order, since which one an account
+# has access to varies.
 IMAGE_MODEL = "dall-e-3"
+IMAGE_MODEL_CANDIDATES = ["gpt-image-1", "dall-e-3", "dall-e-2"]
 VISION_FALLBACK = "gpt-4o"  # used when a user sends a photo on a non-vision model
 
 MODEL_IDS = {m.id for m in CHAT_MODELS}
@@ -116,16 +121,37 @@ async def vision_completion(model: str, text: str, image_url: str) -> ChatResult
     )
 
 
-async def generate_image(prompt: str) -> str:
-    """Generate an image with DALL·E 3, returning a URL."""
-    resp = await client.images.generate(
-        model=IMAGE_MODEL,
-        prompt=prompt,
-        size="1024x1024",
-        quality="standard",
-        n=1,
-    )
-    return resp.data[0].url
+@dataclass
+class ImageResult:
+    kind: str  # "url" or "bytes"
+    url: str | None = None
+    data: bytes | None = None
+    model: str = ""
+
+
+async def generate_image(prompt: str) -> ImageResult:
+    """Generate an image, trying the available image models in order.
+
+    Different models return data differently: DALL·E returns a URL, while
+    gpt-image-1 returns base64. We normalise both into an ImageResult.
+    """
+    last_err: Exception | None = None
+    for model in IMAGE_MODEL_CANDIDATES:
+        try:
+            kwargs: dict = {"model": model, "prompt": prompt, "n": 1, "size": "1024x1024"}
+            if model == "dall-e-3":
+                kwargs["quality"] = "standard"
+            resp = await client.images.generate(**kwargs)
+            item = resp.data[0]
+            if getattr(item, "url", None):
+                return ImageResult(kind="url", url=item.url, model=model)
+            if getattr(item, "b64_json", None):
+                return ImageResult(kind="bytes", data=base64.b64decode(item.b64_json), model=model)
+        except Exception as e:  # noqa: BLE001
+            last_err = e
+            log.warning("image model %s unavailable: %s", model, e)
+            continue
+    raise RuntimeError(last_err or "No image model available")
 
 
 async def transcribe_voice(file_path: str) -> str:
