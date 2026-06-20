@@ -46,6 +46,14 @@ def models_kb(current: str) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
+def photo_action_kb() -> InlineKeyboardMarkup:
+    """Choice shown when a user sends a photo with a caption."""
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="🎨 Transform / Edit", callback_data="img:edit"))
+    kb.row(InlineKeyboardButton(text="👁 Describe it", callback_data="img:describe"))
+    return kb.as_markup()
+
+
 def persona_kb() -> InlineKeyboardMarkup:
     personas = [
         ("🤖 Default assistant", ""),

@@ -8,7 +8,9 @@ and a full **in-chat admin panel** for the owner.
 
 **For everyone**
 - 💬 Chat with multiple OpenAI models — GPT-4o, GPT-4.1, GPT-4 Turbo, o1/o3-mini, GPT-3.5
-- 🎨 Image generation with DALL·E 3 (`🎨 Image` mode)
+- 🎨 Image generation from text (`🎨 Image` mode)
+- 🪄 Image **editing / transformation** — send a photo + a prompt (e.g. the viral
+  "draw me as a chaotic fan-art sketchbook page") and pick 🎨 Transform
 - 🖼 Vision — send a photo and the bot analyses it
 - 🎙 Voice — send a voice message, it's transcribed with Whisper and answered
 - 🎭 Personas — turn the assistant into a developer, teacher, writer, translator…

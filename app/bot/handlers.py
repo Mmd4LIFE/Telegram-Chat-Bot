@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import html
+import io
 import logging
 import os
 import tempfile
@@ -9,17 +10,20 @@ import tempfile
 from aiogram import F, Router
 from aiogram.enums import ChatAction
 from aiogram.filters import Command, CommandStart
+from aiogram.fsm.context import FSMContext
 from aiogram.types import BufferedInputFile, CallbackQuery, Contact, Message as TgMessage
 
 from app.bot import keyboards as kb
 from app.bot.bot import bot, send_long
 from app.bot.formatting import to_telegram_html
 from app.bot.texts import BANNED, HELP, WELCOME
+from app.config import settings
 from app.database import SessionLocal
 from app.services import crud
 from app.services.openai_service import (
     IMAGE_MODEL,
     chat_completion,
+    edit_image,
     generate_image,
     get_model_label,
     transcribe_voice,
@@ -55,12 +59,16 @@ async def cmd_help(message: TgMessage):
 
 @router.message(Command("new"))
 @router.message(F.text == kb.BTN_NEW_CHAT)
-async def cmd_new(message: TgMessage):
+async def cmd_new(message: TgMessage, state: FSMContext):
+    await state.clear()
     async with SessionLocal() as session:
         user = await crud.get_or_create_user(session, message.from_user)
         n = await crud.clear_context(session, user)
+        await crud.set_model(session, user, settings.default_model)  # back to default model
     await message.answer(
-        f"🆕 <b>Fresh start!</b> Cleared {n} messages from memory.\nWhat would you like to talk about?",
+        f"🆕 <b>Fresh start!</b> Cleared {n} messages from memory.\n"
+        f"🤖 Model reset to {get_model_label(settings.default_model)}.\n"
+        "What would you like to talk about?",
         reply_markup=kb.main_menu(user.is_admin),
     )
 
@@ -164,33 +172,113 @@ async def cb_persona(call: CallbackQuery):
 # ───────────────────────── Media handlers ───────────────────────
 
 @router.message(F.photo)
-async def on_photo(message: TgMessage):
+async def on_photo(message: TgMessage, state: FSMContext):
     async with SessionLocal() as session:
         user = await crud.get_or_create_user(session, message.from_user)
         if user.is_banned:
             return await message.answer(BANNED)
 
-    await bot.send_chat_action(message.chat.id, ChatAction.TYPING)
     photo = message.photo[-1]
-    file = await bot.get_file(photo.file_id)
-    file_url = f"https://api.telegram.org/file/bot{bot.token}/{file.file_path}"
-    caption = message.caption or "Describe this image in detail."
+    caption = message.caption
 
+    # No caption → just describe it (classic vision behaviour).
+    if not caption:
+        return await _describe_photo(message.chat.id, message.from_user, photo.file_id,
+                                     "Describe this image in detail.")
+
+    # Captioned → let the user choose: transform the image or describe it.
+    await state.update_data(img_file_id=photo.file_id, img_caption=caption)
+    await message.answer(
+        "🖼 <b>What should I do with this image?</b>\n\n"
+        "🎨 <b>Transform / Edit</b> — redraw it following your prompt\n"
+        "👁 <b>Describe it</b> — explain what's in the picture",
+        reply_markup=kb.photo_action_kb(),
+    )
+
+
+async def _describe_photo(chat_id: int, tg_user, file_id: str, prompt: str):
+    await bot.send_chat_action(chat_id, ChatAction.TYPING)
+    async with SessionLocal() as session:
+        user = await crud.get_or_create_user(session, tg_user)
+        model = user.selected_model
+        is_admin = user.is_admin
+
+    file = await bot.get_file(file_id)
+    file_url = f"https://api.telegram.org/file/bot{bot.token}/{file.file_path}"
     try:
-        result = await vision_completion(user.selected_model, caption, file_url)
+        result = await vision_completion(model, prompt, file_url)
     except Exception as e:  # noqa: BLE001
         log.exception("vision error")
-        return await message.answer(f"⚠️ Could not analyse the image: {e}")
+        return await bot.send_message(chat_id, f"⚠️ Could not analyse the image: {e}")
 
     async with SessionLocal() as session:
-        user = await crud.get_or_create_user(session, message.from_user)
-        await crud.save_message(session, user, "user", f"[photo] {caption}", content_type="image")
+        user = await crud.get_or_create_user(session, tg_user)
+        await crud.save_message(session, user, "user", f"[photo] {prompt}", content_type="image")
         await crud.save_message(
             session, user, "assistant", result.text, model=result.model,
             prompt_tokens=result.prompt_tokens, completion_tokens=result.completion_tokens,
             total_tokens=result.total_tokens,
         )
-    await send_long(message.chat.id, to_telegram_html(result.text), reply_markup=kb.main_menu(user.is_admin))
+    await send_long(chat_id, to_telegram_html(result.text), reply_markup=kb.main_menu(is_admin))
+
+
+async def _edit_photo(chat_id: int, tg_user, file_id: str, prompt: str):
+    await bot.send_chat_action(chat_id, ChatAction.UPLOAD_PHOTO)
+    file = await bot.get_file(file_id)
+    buf = await bot.download_file(file.file_path)
+    image_bytes = buf.read()
+
+    try:
+        result = await edit_image(prompt, image_bytes, filename="photo.jpg", content_type="image/jpeg")
+    except Exception as e:  # noqa: BLE001
+        log.exception("image edit error")
+        return await bot.send_message(chat_id, f"⚠️ Image transformation failed: {e}")
+
+    photo = result.url if result.kind == "url" else BufferedInputFile(result.data, "edited.png")
+    async with SessionLocal() as session:
+        user = await crud.get_or_create_user(session, tg_user)
+        is_admin = user.is_admin
+        await crud.save_message(session, user, "user", f"[photo edit] {prompt}", content_type="image")
+        await crud.save_message(
+            session, user, "assistant", result.url or "[edited image]",
+            content_type="image", model=result.model,
+        )
+    await bot.send_photo(
+        chat_id,
+        photo,
+        caption=f"🎨 <i>{html.escape(prompt[:180])}</i>",
+        reply_markup=kb.main_menu(is_admin),
+    )
+
+
+@router.callback_query(F.data == "img:edit")
+async def cb_img_edit(call: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    file_id, prompt = data.get("img_file_id"), data.get("img_caption")
+    if not file_id:
+        return await call.answer("This image expired — please send it again.", show_alert=True)
+    await call.answer()
+    await state.update_data(img_file_id=None, img_caption=None)
+    try:
+        await call.message.edit_text("🎨 <b>Transforming your image…</b> this can take ~20–40s ⏳")
+    except Exception:  # noqa: BLE001
+        pass
+    await _edit_photo(call.message.chat.id, call.from_user, file_id, prompt)
+
+
+@router.callback_query(F.data == "img:describe")
+async def cb_img_describe(call: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    file_id, prompt = data.get("img_file_id"), data.get("img_caption")
+    if not file_id:
+        return await call.answer("This image expired — please send it again.", show_alert=True)
+    await call.answer()
+    await state.update_data(img_file_id=None, img_caption=None)
+    try:
+        await call.message.edit_text("👁 <b>Analysing the image…</b>")
+    except Exception:  # noqa: BLE001
+        pass
+    await _describe_photo(call.message.chat.id, call.from_user, file_id, prompt)
 
 
 @router.message(F.voice | F.audio)

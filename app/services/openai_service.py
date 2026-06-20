@@ -154,6 +154,27 @@ async def generate_image(prompt: str) -> ImageResult:
     raise RuntimeError(last_err or "No image model available")
 
 
+async def edit_image(
+    prompt: str,
+    image_bytes: bytes,
+    filename: str = "image.png",
+    content_type: str = "image/png",
+) -> ImageResult:
+    """Transform/edit an existing image given a text prompt (gpt-image-1)."""
+    resp = await client.images.edit(
+        model="gpt-image-1",
+        image=(filename, image_bytes, content_type),
+        prompt=prompt,
+        size="1024x1024",
+    )
+    item = resp.data[0]
+    if getattr(item, "b64_json", None):
+        return ImageResult(kind="bytes", data=base64.b64decode(item.b64_json), model="gpt-image-1")
+    if getattr(item, "url", None):
+        return ImageResult(kind="url", url=item.url, model="gpt-image-1")
+    raise RuntimeError("No image returned from edit")
+
+
 async def transcribe_voice(file_path: str) -> str:
     """Transcribe a voice/audio file with Whisper."""
     with open(file_path, "rb") as f:
