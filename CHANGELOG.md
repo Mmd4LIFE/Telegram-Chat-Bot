@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-06-21
+
+### Changed
+- **Segmentation tagging is now computed at the END of each conversation**
+  (instead of every 8 messages), based on that conversation's transcript. The
+  user's current primary tag is stored on `users.segment`.
+- **User notifications about their tag** follow new rules: only users with **more
+  than 10 used conversations** are ever told their tag; they are told once when
+  they qualify, and afterwards only when the tag **changes** — never on every
+  conversation. The last notified value is tracked in `users.segment_notified`.
+
+### Added
+- `users.segment` and `users.segment_notified` columns (migration `0003`).
+- Human-friendly tag labels and a single-best `classify_primary_tag`.
+
 ## [0.3.0] - 2026-06-21
 
 ### Added
@@ -82,7 +97,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Telegram ID.
 - Dockerised: `docker compose up -d` (app `:8009`, db `:5439`).
 
-[Unreleased]: https://github.com/Mmd4LIFE/Telegram-Chat-Bot/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/Mmd4LIFE/Telegram-Chat-Bot/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/Mmd4LIFE/Telegram-Chat-Bot/releases/tag/v0.4.0
 [0.3.0]: https://github.com/Mmd4LIFE/Telegram-Chat-Bot/releases/tag/v0.3.0
 [0.2.0]: https://github.com/Mmd4LIFE/Telegram-Chat-Bot/releases/tag/v0.2.0
 [0.1.2]: https://github.com/Mmd4LIFE/Telegram-Chat-Bot/releases/tag/v0.1.2

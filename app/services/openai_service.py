@@ -246,3 +246,30 @@ async def classify_tags(transcript: str) -> list[str]:
     )
     raw = (resp.choices[0].message.content or "").lower()
     return [t for t in TAG_VOCABULARY if t in raw][:3]
+
+
+# Human-friendly labels for the segmentation tags shown to users.
+TAG_LABELS = {
+    "tech_user": "🧑‍💻 Tech user",
+    "developer": "👨‍💻 Developer",
+    "creative": "🎨 Creative",
+    "business": "💼 Business-minded",
+    "student": "🎓 Student",
+    "researcher": "🔬 Researcher",
+    "casual_user": "💬 Casual user",
+    "power_user": "⚡ Power user",
+    "image_lover": "🖼 Visual creator",
+    "polite": "🙏 Polite",
+    "low_quality": "🫧 Low-signal",
+    "spammer": "🚯 Spammy",
+}
+
+
+def tag_label(tag: str) -> str:
+    return TAG_LABELS.get(tag, f"🏷 {tag}")
+
+
+async def classify_primary_tag(transcript: str) -> str | None:
+    """Pick the single best segmentation tag for a user (or None)."""
+    tags = await classify_tags(transcript)
+    return tags[0] if tags else None

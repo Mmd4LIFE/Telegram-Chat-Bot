@@ -28,8 +28,9 @@ and a full **in-chat admin panel** for the owner.
 - 👤 Inspect any user: `/user <id>` or `/find <username>` (full profile card incl. tags)
 - 🚫 Ban / unban inline or via `/ban <id>` `/unban <id>`
 - 🏷 Segmentation tags / badges: `/tag <id> <tag>`, `/untag <id> <tag>`,
-  `/classify <id>` (LLM auto-classifies the user). Tags are also auto-suggested
-  every 8 messages.
+  `/classify <id>` (LLM auto-classifies the user). The bot also recomputes a
+  primary tag at the **end of each conversation**; users with **>10
+  conversations** are told their tag once, then only when it **changes**.
 
 **Data** — a small **star schema** in PostgreSQL, managed by **Alembic**
 migrations (version-by-version):

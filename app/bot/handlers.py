@@ -24,11 +24,12 @@ from app.services import crud, vector_service
 from app.services.openai_service import (
     IMAGE_MODEL,
     chat_completion,
-    classify_tags,
+    classify_primary_tag,
     edit_image,
     generate_image,
     get_model_label,
     summarize_title,
+    tag_label,
     transcribe_voice,
     vision_completion,
 )
@@ -67,9 +68,11 @@ async def cmd_new(message: TgMessage, state: FSMContext):
     async with SessionLocal() as session:
         user = await crud.get_or_create_user(session, message.from_user)
         old = await crud.get_active_conversation(session, user)
-        await _maybe_title(session, old.id)            # recap the chat we're leaving
+        old_id = old.id
+        await _maybe_title(session, old_id)            # recap the chat we're leaving
         await crud.start_new_conversation(session, user)
         await crud.set_model(session, user, settings.default_model)  # back to default model
+    asyncio.create_task(_segment_user(user.id, old_id, message.from_user.id))
     await message.answer(
         "🆕 <b>New chat started.</b> Your previous chat was saved to 📜 History.\n"
         f"🤖 Model reset to {get_model_label(settings.default_model)}.\n"
@@ -121,9 +124,11 @@ async def cb_conv_new(call: CallbackQuery, state: FSMContext):
     async with SessionLocal() as session:
         user = await crud.get_or_create_user(session, call.from_user)
         old = await crud.get_active_conversation(session, user)
-        await _maybe_title(session, old.id)
+        old_id = old.id
+        await _maybe_title(session, old_id)
         await crud.start_new_conversation(session, user)
         await crud.set_model(session, user, settings.default_model)
+    asyncio.create_task(_segment_user(user.id, old_id, call.from_user.id))
     await call.answer("New chat started")
     try:
         await call.message.edit_text("🆕 <b>New chat started.</b> Ask me anything!")
@@ -136,9 +141,13 @@ async def cb_conv_open(call: CallbackQuery):
     conv_id = int(call.data.split(":", 1)[1])
     async with SessionLocal() as session:
         user = await crud.get_or_create_user(session, call.from_user)
+        left = await crud.get_active_conversation(session, user)
+        left_id = left.id
         conv = await crud.set_active_conversation(session, user, conv_id)
     if not conv:
         return await call.answer("Conversation not found", show_alert=True)
+    if left_id != conv_id:  # we left a conversation → segment it
+        asyncio.create_task(_segment_user(user.id, left_id, call.from_user.id))
     await call.answer("Resumed")
     title = conv.title or "this chat"
     try:
@@ -476,25 +485,73 @@ def _build_personalized_prompt(system_prompt: str | None, memories: list[str], t
 
 
 async def _learn_from_turn(user_id: int, conv_id: int, text: str) -> None:
-    """Store this user message as personalization memory + occasionally re-tag."""
+    """Store this user message as personalization memory in the vector engine."""
     try:
         vid = await vector_service.remember(user_id, text, conversation_id=conv_id, role="user")
         async with SessionLocal() as session:
             await crud.add_user_memory(
                 session, user_id, text, vector_id=vid, conversation_id=conv_id, kind="message"
             )
-            count = await crud.count_user_messages(session, user_id)
-            # Re-segment the user every 8 messages.
-            if count and count % 8 == 0:
-                transcript = await crud.recent_user_messages_text(session, user_id)
-                try:
-                    suggested = await classify_tags(transcript)
-                except Exception:  # noqa: BLE001
-                    suggested = []
-                for tag in suggested:
-                    await crud.add_user_tag(session, user_id, tag, source="auto")
     except Exception:  # noqa: BLE001
         log.exception("learn_from_turn failed")
+
+
+async def _segment_user(user_id: int, conv_id: int, chat_id: int) -> None:
+    """Recompute a user's segmentation tag at the END of a conversation.
+
+    Notification rules (per request):
+      • Only users with MORE THAN 10 used conversations are ever told their tag.
+      • The first time they qualify we tell them; afterwards we only message them
+        when the tag actually CHANGES — never on every conversation.
+    """
+    try:
+        async with SessionLocal() as session:
+            transcript = await crud.conversation_transcript(session, conv_id)
+            if not transcript.strip():
+                return  # empty conversation → nothing to segment
+
+            new_tag = await classify_primary_tag(transcript)
+            if not new_tag:
+                return
+
+            user = await crud.get_user_by_telegram_id(session, chat_id)
+            if not user:
+                return
+            previous_segment = user.segment
+            previous_notified = user.segment_notified
+
+            # Persist the new segment (and keep tag history in user_tags).
+            await crud.set_user_segment(session, user.id, new_tag)
+            await crud.add_user_tag(session, user.id, new_tag, source="auto")
+
+            conv_count = await crud.count_used_conversations(session, user.id)
+            if conv_count <= 10:
+                return  # not enough history to talk about it yet
+
+            # Notify on first qualification OR when the tag changed since last told.
+            if previous_notified == new_tag:
+                return
+            first_time = previous_notified is None
+
+            await crud.mark_segment_notified(session, user.id, new_tag)
+
+        label = tag_label(new_tag)
+        if first_time:
+            note = (
+                f"✨ I've gotten to know you over {conv_count} conversations.\n"
+                f"Your profile: <b>{label}</b>\n"
+                "<i>I'll use this to personalize my answers. I'll only ping you again "
+                "if it changes.</i>"
+            )
+        else:
+            prev_label = tag_label(previous_segment) if previous_segment else "—"
+            note = (
+                f"🔄 Your profile changed: {prev_label} → <b>{label}</b>\n"
+                "<i>I'll keep tailoring my answers to you.</i>"
+            )
+        await bot.send_message(chat_id, note)
+    except Exception:  # noqa: BLE001
+        log.exception("segment_user failed")
 
 
 def _admin_id() -> int:

@@ -297,6 +297,29 @@ async def count_user_messages(session: AsyncSession, user_id: int) -> int:
     ) or 0
 
 
+async def count_used_conversations(session: AsyncSession, user_id: int) -> int:
+    """Conversations the user has actually sent messages in."""
+    return await session.scalar(
+        select(func.count(func.distinct(Message.conversation_id))).where(
+            Message.user_id == user_id
+        )
+    ) or 0
+
+
+async def set_user_segment(session: AsyncSession, user_id: int, segment: str) -> None:
+    user = await session.get(User, user_id)
+    if user:
+        user.segment = segment
+        await session.commit()
+
+
+async def mark_segment_notified(session: AsyncSession, user_id: int, value: str) -> None:
+    user = await session.get(User, user_id)
+    if user:
+        user.segment_notified = value
+        await session.commit()
+
+
 async def recent_user_messages_text(session: AsyncSession, user_id: int, limit: int = 15) -> str:
     result = await session.execute(
         select(Message.content)

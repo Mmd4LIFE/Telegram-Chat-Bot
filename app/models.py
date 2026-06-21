@@ -52,6 +52,12 @@ class User(Base):
     is_banned: Mapped[bool] = mapped_column(Boolean, default=False)
     system_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # Auto segmentation: `segment` is the user's current primary tag, recomputed
+    # at the end of each conversation; `segment_notified` is the last tag value
+    # we told the user about (so we only message them when it changes).
+    segment: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    segment_notified: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     last_active: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
