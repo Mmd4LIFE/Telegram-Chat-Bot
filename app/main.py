@@ -19,10 +19,11 @@ from app.bot.admin_handlers import router as bot_admin_router
 from app.bot.bot import bot, dp
 from app.bot.group_handlers import router as bot_group_router
 from app.bot.handlers import router as bot_router
+from app.config import settings
 from app.database import ping
 from app.logger import get_logger, setup_logging
 from app.migrate import run_upgrade
-from app.services import vector_service
+from app.services import reengagement, vector_service
 
 setup_logging()
 log = get_logger("app")
@@ -60,14 +61,18 @@ async def lifespan(app: FastAPI):
     log.info("Starting bot @%s (v%s) …", me.username, __version__)
     await bot.delete_webhook(drop_pending_updates=True)
     polling_task = asyncio.create_task(dp.start_polling(bot, handle_signals=False))
+    reengage_task = asyncio.create_task(reengagement.run_scheduler())
+    log.info("Re-engagement scheduler started (every %s min, idle %sh).",
+             settings.reengage_check_minutes, settings.reengage_inactivity_hours)
 
     try:
         yield
     finally:
-        log.info("Shutting down bot…")
-        polling_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await polling_task
+        log.info("Shutting down…")
+        for task in (polling_task, reengage_task):
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
         await bot.session.close()
         await vector_service.close()
 

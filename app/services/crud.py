@@ -180,6 +180,33 @@ async def set_conversation_title(session: AsyncSession, conv_id: int, title: str
         await session.commit()
 
 
+async def stale_active_conversations(
+    session: AsyncSession, hours: int, limit: int = 50
+) -> list[tuple[Conversation, User]]:
+    """Active conversations idle for `hours`, belonging to active (started) users,
+    that contain at least one USER message (so there's context to follow up on and
+    we never nag an unanswered bot-initiated chat)."""
+    threshold = datetime.now(timezone.utc) - timedelta(hours=hours)
+    has_user_msg = (
+        select(Message.id)
+        .where(Message.conversation_id == Conversation.id, Message.role == "user")
+        .exists()
+    )
+    rows = await session.execute(
+        select(Conversation, User)
+        .join(User, User.id == Conversation.user_id)
+        .where(
+            Conversation.is_active == True,  # noqa: E712
+            User.is_active == True,  # noqa: E712
+            User.is_banned == False,  # noqa: E712
+            func.coalesce(Conversation.last_message_at, Conversation.created_at) < threshold,
+            has_user_msg,
+        )
+        .limit(limit)
+    )
+    return [(c, u) for c, u in rows.all()]
+
+
 # ───────────────────────── Messages + token audit ─────────────────────────
 
 async def save_message(

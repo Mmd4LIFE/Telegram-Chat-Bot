@@ -28,6 +28,13 @@ class Settings(BaseSettings):
     embed_dim: int = 1536
     personalization_topk: int = 4
 
+    # Proactive re-engagement: close a conversation that has been idle this long
+    # and open a new one with a persona-aware follow-up question.
+    reengage_enabled: bool = True
+    reengage_inactivity_hours: int = 24
+    reengage_check_minutes: int = 30
+    reengage_max_per_run: int = 50
+
     # App
     app_port: int = 8009
     default_model: str = "gpt-4o-mini"

@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-06-21
+
+### Added
+- **Proactive re-engagement.** A background scheduler closes conversations that
+  have been open but idle for 24h (no user message), opens a fresh one, and
+  sends the user a short, persona-aware follow-up question referencing their
+  previous conversation — to pull them back in.
+  - Only active (started, non-banned) users with at least one prior user message
+    are targeted, so group-only members aren't messaged and an ignored opener is
+    never nagged again until the user replies.
+  - Tunable via `REENGAGE_ENABLED`, `REENGAGE_INACTIVITY_HOURS`,
+    `REENGAGE_CHECK_MINUTES`, `REENGAGE_MAX_PER_RUN`. No schema change required.
+
 ## [0.5.1] - 2026-06-21
 
 ### Added
@@ -136,7 +149,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Telegram ID.
 - Dockerised: `docker compose up -d` (app `:8009`, db `:5439`).
 
-[Unreleased]: https://github.com/Mmd4LIFE/Telegram-Chat-Bot/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/Mmd4LIFE/Telegram-Chat-Bot/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/Mmd4LIFE/Telegram-Chat-Bot/releases/tag/v0.6.0
 [0.5.1]: https://github.com/Mmd4LIFE/Telegram-Chat-Bot/releases/tag/v0.5.1
 [0.5.0]: https://github.com/Mmd4LIFE/Telegram-Chat-Bot/releases/tag/v0.5.0
 [0.4.0]: https://github.com/Mmd4LIFE/Telegram-Chat-Bot/releases/tag/v0.4.0

@@ -273,3 +273,30 @@ async def classify_primary_tag(transcript: str) -> str | None:
     """Pick the single best segmentation tag for a user (or None)."""
     tags = await classify_tags(transcript)
     return tags[0] if tags else None
+
+
+async def generate_reengagement(
+    transcript: str, persona: str | None = None, segment: str | None = None
+) -> str:
+    """Write a short, warm follow-up question to re-engage a quiet user."""
+    system = (
+        "A user you were chatting with has been quiet for a day. Based on their "
+        "previous conversation below, write ONE short, warm, natural message "
+        "(1-2 sentences) that asks a specific, relevant follow-up question to "
+        "restart the chat. Reference what they actually discussed — do not greet "
+        "generically. No quotes, no preamble."
+    )
+    if persona:
+        system += f"\nKeep this assistant persona: {persona}"
+    if segment:
+        system += f"\nThe user is a '{segment}' type — tailor the tone accordingly."
+    resp = await client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": transcript[:3000]},
+        ],
+        temperature=0.8,
+        max_tokens=120,
+    )
+    return (resp.choices[0].message.content or "").strip()
