@@ -14,7 +14,7 @@ from app.bot.bot import bot
 from app.bot.states import AdminStates
 from app.config import settings
 from app.database import SessionLocal
-from app.services import crud
+from app.services import crud, group_crud
 from app.services.openai_service import classify_tags
 
 log = logging.getLogger(__name__)
@@ -42,6 +42,7 @@ async def admin_panel(message: TgMessage):
 async def _stats_text() -> str:
     async with SessionLocal() as session:
         s = await crud.get_stats(session)
+        g = await group_crud.group_stats(session)
     return (
         "📊 <b>Bot statistics</b>\n\n"
         f"👥 Total users: <b>{s['total_users']}</b>\n"
@@ -51,7 +52,9 @@ async def _stats_text() -> str:
         f"🚫 Banned: <b>{s['banned_users']}</b>\n"
         f"💬 Messages: <b>{s['total_messages']}</b>\n"
         f"🎨 Images: <b>{s['total_images']}</b>\n"
-        f"🔢 Tokens: <b>{s['total_tokens']:,}</b>"
+        f"🔢 Tokens: <b>{s['total_tokens']:,}</b>\n"
+        f"👨‍👩‍👧 Groups: <b>{g['active_groups']}</b>/{g['total_groups']} active · "
+        f"{g['total_group_messages']:,} msgs logged"
     )
 
 

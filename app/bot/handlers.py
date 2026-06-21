@@ -20,7 +20,8 @@ from app.bot.formatting import to_telegram_html
 from app.bot.texts import BANNED, HELP, WELCOME
 from app.config import settings
 from app.database import SessionLocal
-from app.services import crud, vector_service
+from app.services import crud, group_crud, vector_service
+from app.utils.emoji import extract_emojis
 from app.services.openai_service import (
     IMAGE_MODEL,
     chat_completion,
@@ -444,9 +445,11 @@ async def _handle_chat(message: TgMessage, text: str, user_prefix: str = ""):
         context = await crud.get_context(session, user)
         tags = [t.tag for t in await crud.list_user_tags(session, user.id)]
 
-    # ── Personalization: recall relevant memories from the vector engine ──
+    # ── Personalization: recall memories + the user's favourite emojis ──
     memories = await vector_service.recall(user_id, text)
-    augmented_prompt = _build_personalized_prompt(system_prompt, memories, tags)
+    async with SessionLocal() as session:
+        fav_emojis = [e for e, _ in await group_crud.top_emojis(session, user_id, limit=5)]
+    augmented_prompt = _build_personalized_prompt(system_prompt, memories, tags, fav_emojis)
 
     try:
         result = await chat_completion(model, context, augmented_prompt)
@@ -470,7 +473,12 @@ async def _handle_chat(message: TgMessage, text: str, user_prefix: str = ""):
     asyncio.create_task(_learn_from_turn(user_id, conv_id, text))
 
 
-def _build_personalized_prompt(system_prompt: str | None, memories: list[str], tags: list[str]) -> str:
+def _build_personalized_prompt(
+    system_prompt: str | None,
+    memories: list[str],
+    tags: list[str],
+    fav_emojis: list[str] | None = None,
+) -> str:
     parts: list[str] = []
     if system_prompt:
         parts.append(system_prompt)
@@ -481,17 +489,25 @@ def _build_personalized_prompt(system_prompt: str | None, memories: list[str], t
             "What you remember about this user (use it to personalize, do not mention it):\n- "
             + "\n- ".join(memories)
         )
+    if fav_emojis:
+        parts.append(
+            "This user often uses these emojis: " + " ".join(fav_emojis) + ". "
+            "Naturally sprinkle a few of them into your replies to match their vibe."
+        )
     return "\n\n".join(parts) if parts else None
 
 
 async def _learn_from_turn(user_id: int, conv_id: int, text: str) -> None:
-    """Store this user message as personalization memory in the vector engine."""
+    """Store this user message as personalization memory + count their emojis."""
     try:
         vid = await vector_service.remember(user_id, text, conversation_id=conv_id, role="user")
         async with SessionLocal() as session:
             await crud.add_user_memory(
                 session, user_id, text, vector_id=vid, conversation_id=conv_id, kind="message"
             )
+            emojis = extract_emojis(text)
+            if emojis:
+                await group_crud.increment_emojis(session, user_id, emojis)
     except Exception:  # noqa: BLE001
         log.exception("learn_from_turn failed")
 

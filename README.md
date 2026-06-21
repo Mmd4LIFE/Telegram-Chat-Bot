@@ -19,6 +19,11 @@ and a full **in-chat admin panel** for the owner.
   title; browse and resume them like the ChatGPT app
 - ✨ **Personalization** — a Qdrant vector engine remembers each user across
   chats and tailors replies ("personalization is all you need")
+- 😀 **Emoji-aware** — learns each user's favourite emojis (from DMs and groups)
+  and mirrors them naturally in replies
+- 👨‍👩‍👧 **Group logger** — add the bot to a group and it logs every message type
+  (text, sticker, voice→transcribed, photo, video…) to enrich each member's
+  personalization profile
 - 📊 Personal usage stats
 - Glassy UX: persistent `ReplyKeyboardMarkup` menu + inline "glass" keyboards
 
@@ -105,6 +110,17 @@ docker compose down -v       # wipe the database too
 
 > ⚠️ The committed `.env` contains live API keys you provided. Keep this repo
 > private and rotate the keys if they were ever exposed.
+
+### Group logging (important BotFather setting)
+
+By default Telegram bots only receive group messages that mention them
+(*privacy mode*). To let the group logger see **all** messages, disable privacy:
+
+> BotFather → `/mybots` → your bot → *Bot Settings* → *Group Privacy* → **Turn off**
+
+Then remove & re-add the bot to the group. The bot logs every message type and
+uses it to personalize each member; it posts a one-time notice when added so the
+group is aware.
 
 ## 🏗 Architecture
 

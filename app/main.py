@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -18,18 +17,21 @@ from app import __version__
 from app.api.routes import router as api_router
 from app.bot.admin_handlers import router as bot_admin_router
 from app.bot.bot import bot, dp
+from app.bot.group_handlers import router as bot_group_router
 from app.bot.handlers import router as bot_router
 from app.database import ping
+from app.logger import get_logger, setup_logging
 from app.migrate import run_upgrade
 from app.services import vector_service
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)-7s | %(name)s | %(message)s",
-)
-log = logging.getLogger("app")
+setup_logging()
+log = get_logger("app")
 
-# Register bot routers — admin first so it has priority over the catch-all.
+# Register bot routers. Order matters:
+#   1) group router — consumes group/supergroup messages (logging only)
+#   2) admin router — admin-only DM commands
+#   3) main router  — everything else in DMs
+dp.include_router(bot_group_router)
 dp.include_router(bot_admin_router)
 dp.include_router(bot_router)
 

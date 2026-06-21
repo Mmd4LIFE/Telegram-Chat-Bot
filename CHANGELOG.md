@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-06-21
+
+### Added
+- **Group logger** — when added to a group (with privacy mode disabled in
+  BotFather), the bot captures every message of every type and stores it in new
+  `groups` / `group_messages` tables. Voice & round-video notes are transcribed
+  with Whisper; stickers store their emoji + `file_id`; photos/videos/etc. are
+  logged with type and caption.
+- **Emoji-aware personalization** — `user_emoji_stats` tracks each user's most
+  used emojis (from both DMs and groups); the bot is told a user's favourite
+  emojis and naturally mirrors them in replies.
+- Group text and transcribed voice feed the same per-user vector memory, so
+  personalization spans DMs *and* groups.
+- Group statistics in the admin 📊 panel.
+- Centralized logging module (`app/logger.py`).
+- Migration `0004` (groups, group_messages, user_emoji_stats).
+
+### Changed
+- **Models reorganised into a package** (`app/models/`), one module per related
+  group of tables (user, conversation, message, model_selection, token_audit,
+  group, system).
+
 ## [0.4.0] - 2026-06-21
 
 ### Changed
@@ -97,7 +119,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Telegram ID.
 - Dockerised: `docker compose up -d` (app `:8009`, db `:5439`).
 
-[Unreleased]: https://github.com/Mmd4LIFE/Telegram-Chat-Bot/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/Mmd4LIFE/Telegram-Chat-Bot/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/Mmd4LIFE/Telegram-Chat-Bot/releases/tag/v0.5.0
 [0.4.0]: https://github.com/Mmd4LIFE/Telegram-Chat-Bot/releases/tag/v0.4.0
 [0.3.0]: https://github.com/Mmd4LIFE/Telegram-Chat-Bot/releases/tag/v0.3.0
 [0.2.0]: https://github.com/Mmd4LIFE/Telegram-Chat-Bot/releases/tag/v0.2.0
