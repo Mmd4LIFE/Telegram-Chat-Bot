@@ -17,6 +17,15 @@ services:
       timeout: 5s
       retries: 10
 
+  qdrant:
+    image: qdrant/qdrant:v1.12.4
+    container_name: chatbot_qdrant
+    restart: unless-stopped
+    ports:
+      - "6339:6333"   # REST API on host :6339
+    volumes:
+      - qdrantdata:/qdrant/storage
+
   app:
     build: .
     container_name: chatbot_app
@@ -25,11 +34,16 @@ services:
     environment:
       POSTGRES_HOST: db
       POSTGRES_PORT: 5432
+      QDRANT_HOST: qdrant
+      QDRANT_PORT: 6333
     depends_on:
       db:
         condition: service_healthy
+      qdrant:
+        condition: service_started
     ports:
       - "8009:8009"
 
 volumes:
   pgdata:
+  qdrantdata:

@@ -180,3 +180,69 @@ async def transcribe_voice(file_path: str) -> str:
     with open(file_path, "rb") as f:
         resp = await client.audio.transcriptions.create(model="whisper-1", file=f)
     return resp.text.strip()
+
+
+# ─────────────────────── Embeddings & helpers ───────────────────────
+
+async def embed_text(text: str) -> list[float]:
+    """Return an embedding vector for `text`."""
+    resp = await client.embeddings.create(model=settings.embed_model, input=text[:8000])
+    return resp.data[0].embedding
+
+
+async def summarize_title(transcript: str) -> str:
+    """Produce a short 3–6 word title summarising a conversation."""
+    resp = await client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {
+                "role": "system",
+                "content": "Summarise the conversation as a concise 3-6 word title. "
+                "No quotes, no trailing punctuation. Reply with the title only.",
+            },
+            {"role": "user", "content": transcript[:4000]},
+        ],
+        temperature=0.3,
+        max_tokens=20,
+    )
+    return (resp.choices[0].message.content or "").strip().strip('"')[:80]
+
+
+# Controlled vocabulary the auto-classifier may assign for user segmentation.
+TAG_VOCABULARY = [
+    "tech_user",
+    "developer",
+    "creative",
+    "business",
+    "student",
+    "researcher",
+    "casual_user",
+    "power_user",
+    "image_lover",
+    "polite",
+    "low_quality",
+    "spammer",
+]
+
+
+async def classify_tags(transcript: str) -> list[str]:
+    """Classify a user (from a sample of their messages) into segmentation tags."""
+    resp = await client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "You segment chatbot users. Given a sample of a user's messages, "
+                    "pick 1-3 tags that best describe them from this exact list: "
+                    + ", ".join(TAG_VOCABULARY)
+                    + ". Reply with ONLY the chosen tags, comma-separated, no extra text."
+                ),
+            },
+            {"role": "user", "content": transcript[:4000]},
+        ],
+        temperature=0.0,
+        max_tokens=30,
+    )
+    raw = (resp.choices[0].message.content or "").lower()
+    return [t for t in TAG_VOCABULARY if t in raw][:3]

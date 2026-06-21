@@ -23,6 +23,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -59,10 +60,16 @@ class User(Base):
     messages: Mapped[list["Message"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
+    conversations: Mapped[list["Conversation"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
     model_selections: Mapped[list["ModelSelection"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
     token_audits: Mapped[list["TokenAudit"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
+    tags: Mapped[list["UserTag"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
 
@@ -73,6 +80,34 @@ class User(Base):
         )
 
 
+class Conversation(Base):
+    """A chat session grouping messages — like a ChatGPT conversation.
+
+    Each conversation has a short title/recap so users can browse their history.
+    Exactly one conversation per user is `is_active` (the one in progress).
+    """
+
+    __tablename__ = "conversations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+
+    title: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+    last_message_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    user: Mapped["User"] = relationship(back_populates="conversations")
+    messages: Mapped[list["Message"]] = relationship(
+        back_populates="conversation", cascade="all, delete-orphan"
+    )
+
+
 class Message(Base):
     """Conversation content (may be cleared when a user starts a new chat)."""
 
@@ -80,6 +115,9 @@ class Message(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    conversation_id: Mapped[int] = mapped_column(
+        ForeignKey("conversations.id", ondelete="CASCADE"), index=True
+    )
 
     role: Mapped[str] = mapped_column(String(16))  # user | assistant | system
     content: Mapped[str] = mapped_column(Text)
@@ -90,6 +128,7 @@ class Message(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     user: Mapped["User"] = relationship(back_populates="messages")
+    conversation: Mapped["Conversation"] = relationship(back_populates="messages")
 
 
 class ModelSelection(Base):
@@ -121,6 +160,9 @@ class TokenAudit(Base):
     message_id: Mapped[int | None] = mapped_column(
         ForeignKey("messages.id", ondelete="SET NULL"), nullable=True, index=True
     )
+    conversation_id: Mapped[int | None] = mapped_column(
+        ForeignKey("conversations.id", ondelete="SET NULL"), nullable=True, index=True
+    )
 
     role: Mapped[str] = mapped_column(String(16))
     content_type: Mapped[str] = mapped_column(String(16), default="text")
@@ -144,6 +186,44 @@ class BroadcastLog(Base):
     text: Mapped[str] = mapped_column(Text)
     sent_count: Mapped[int] = mapped_column(Integer, default=0)
     failed_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class UserTag(Base):
+    """Segmentation badge attached to a user (e.g. tech_user, power_user).
+
+    `source` records whether a human admin or the auto-classifier assigned it.
+    """
+
+    __tablename__ = "user_tags"
+    __table_args__ = (UniqueConstraint("user_id", "tag", name="uq_user_tag"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    tag: Mapped[str] = mapped_column(String(64))
+    source: Mapped[str] = mapped_column(String(16), default="admin")  # admin|auto
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    user: Mapped["User"] = relationship(back_populates="tags")
+
+
+class UserMemory(Base):
+    """Relational mirror of personalization facts stored in the vector engine.
+
+    The embedding itself lives in Qdrant; this table keeps a queryable copy of
+    what we remember about a user (and where it came from)."""
+
+    __tablename__ = "user_memories"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    conversation_id: Mapped[int | None] = mapped_column(
+        ForeignKey("conversations.id", ondelete="SET NULL"), nullable=True
+    )
+    vector_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    kind: Mapped[str] = mapped_column(String(24), default="message")  # message|fact|preference
+    content: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

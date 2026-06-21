@@ -9,10 +9,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.models import (
     BroadcastLog,
+    Conversation,
     Message,
     ModelSelection,
     TokenAudit,
     User,
+    UserMemory,
+    UserTag,
 )
 
 
@@ -38,6 +41,8 @@ async def get_or_create_user(session: AsyncSession, tg_user) -> User:
         await session.flush()
         # seed the initial model selection so the user has a "current" model
         session.add(ModelSelection(user_id=user.id, model=settings.default_model))
+        # seed the first (active) conversation
+        session.add(Conversation(user_id=user.id, is_active=True))
         await session.commit()
         await session.refresh(user)
         return user
@@ -83,6 +88,90 @@ async def set_system_prompt(session: AsyncSession, user: User, prompt: str | Non
     await session.commit()
 
 
+# ───────────────────────────── Conversations ─────────────────────────────
+
+async def get_active_conversation(session: AsyncSession, user: User) -> Conversation:
+    """Return the user's active conversation, creating one if needed."""
+    result = await session.execute(
+        select(Conversation)
+        .where(Conversation.user_id == user.id, Conversation.is_active == True)  # noqa: E712
+        .order_by(desc(Conversation.id))
+        .limit(1)
+    )
+    conv = result.scalar_one_or_none()
+    if conv is None:
+        conv = Conversation(user_id=user.id, is_active=True)
+        session.add(conv)
+        await session.commit()
+        await session.refresh(conv)
+    return conv
+
+
+async def start_new_conversation(session: AsyncSession, user: User) -> Conversation:
+    """Archive the current conversation and open a fresh active one."""
+    result = await session.execute(
+        select(Conversation).where(
+            Conversation.user_id == user.id, Conversation.is_active == True  # noqa: E712
+        )
+    )
+    for conv in result.scalars().all():
+        conv.is_active = False
+    new_conv = Conversation(user_id=user.id, is_active=True)
+    session.add(new_conv)
+    await session.commit()
+    await session.refresh(new_conv)
+    return new_conv
+
+
+async def set_active_conversation(session: AsyncSession, user: User, conv_id: int) -> Conversation | None:
+    """Resume a previous conversation (make it the active one)."""
+    target = await session.get(Conversation, conv_id)
+    if not target or target.user_id != user.id:
+        return None
+    result = await session.execute(
+        select(Conversation).where(
+            Conversation.user_id == user.id, Conversation.is_active == True  # noqa: E712
+        )
+    )
+    for conv in result.scalars().all():
+        conv.is_active = False
+    target.is_active = True
+    await session.commit()
+    return target
+
+
+async def list_conversations(
+    session: AsyncSession, user: User, limit: int = 10
+) -> list[tuple[Conversation, int]]:
+    """Recent conversations (that have messages) → (conversation, message_count)."""
+    rows = await session.execute(
+        select(Conversation, func.count(Message.id))
+        .join(Message, Message.conversation_id == Conversation.id)
+        .where(Conversation.user_id == user.id)
+        .group_by(Conversation.id)
+        .order_by(desc(Conversation.updated_at))
+        .limit(limit)
+    )
+    return [(c, int(n)) for c, n in rows.all()]
+
+
+async def conversation_transcript(session: AsyncSession, conv_id: int, limit: int = 12) -> str:
+    result = await session.execute(
+        select(Message)
+        .where(Message.conversation_id == conv_id)
+        .order_by(Message.created_at)
+        .limit(limit)
+    )
+    return "\n".join(f"{m.role}: {m.content}" for m in result.scalars().all())
+
+
+async def set_conversation_title(session: AsyncSession, conv_id: int, title: str) -> None:
+    conv = await session.get(Conversation, conv_id)
+    if conv:
+        conv.title = title
+        await session.commit()
+
+
 # ───────────────────────── Messages + token audit ─────────────────────────
 
 async def save_message(
@@ -97,10 +186,15 @@ async def save_message(
     completion_tokens: int = 0,
     total_tokens: int = 0,
     telegram_message_id: int | None = None,
+    conversation_id: int | None = None,
 ) -> Message:
     """Persist conversation content (messages) AND a durable token audit row."""
+    if conversation_id is None:
+        conversation_id = (await get_active_conversation(session, user)).id
+
     msg = Message(
         user_id=user.id,
+        conversation_id=conversation_id,
         role=role,
         content=content,
         content_type=content_type,
@@ -114,6 +208,7 @@ async def save_message(
         TokenAudit(
             user_id=user.id,
             message_id=msg.id,
+            conversation_id=conversation_id,
             role=role,
             content_type=content_type,
             model=model,
@@ -122,16 +217,20 @@ async def save_message(
             total_tokens=total_tokens,
         )
     )
+    conv = await session.get(Conversation, conversation_id)
+    if conv:
+        conv.last_message_at = func.now()
     await session.commit()
     return msg
 
 
 async def get_context(session: AsyncSession, user: User) -> list[dict]:
-    """Last N text messages as OpenAI chat history (oldest -> newest)."""
+    """Last N text messages of the ACTIVE conversation (oldest -> newest)."""
+    conv = await get_active_conversation(session, user)
     result = await session.execute(
         select(Message)
         .where(
-            Message.user_id == user.id,
+            Message.conversation_id == conv.id,
             Message.role.in_(["user", "assistant"]),
             Message.content_type == "text",
         )
@@ -143,19 +242,69 @@ async def get_context(session: AsyncSession, user: User) -> list[dict]:
     return [{"role": m.role, "content": m.content} for m in rows]
 
 
-async def clear_context(session: AsyncSession, user: User) -> int:
-    """Delete a user's messages so context starts fresh.
+# ─────────────────────────── Tags & memory ───────────────────────────
 
-    Token audits persist (their message_id is set NULL by the FK), so usage
-    history is preserved.
-    """
-    result = await session.execute(select(Message).where(Message.user_id == user.id))
-    msgs = result.scalars().all()
-    count = len(msgs)
-    for m in msgs:
-        await session.delete(m)
+async def add_user_tag(
+    session: AsyncSession, user_id: int, tag: str, *, source: str = "admin", note: str | None = None
+) -> bool:
+    existing = await session.execute(
+        select(UserTag).where(UserTag.user_id == user_id, UserTag.tag == tag)
+    )
+    if existing.scalar_one_or_none():
+        return False
+    session.add(UserTag(user_id=user_id, tag=tag, source=source, note=note))
     await session.commit()
-    return count
+    return True
+
+
+async def remove_user_tag(session: AsyncSession, user_id: int, tag: str) -> bool:
+    result = await session.execute(
+        select(UserTag).where(UserTag.user_id == user_id, UserTag.tag == tag)
+    )
+    obj = result.scalar_one_or_none()
+    if not obj:
+        return False
+    await session.delete(obj)
+    await session.commit()
+    return True
+
+
+async def list_user_tags(session: AsyncSession, user_id: int) -> list[UserTag]:
+    result = await session.execute(
+        select(UserTag).where(UserTag.user_id == user_id).order_by(UserTag.created_at)
+    )
+    return list(result.scalars().all())
+
+
+async def add_user_memory(
+    session: AsyncSession, user_id: int, content: str, *,
+    vector_id: str | None = None, conversation_id: int | None = None, kind: str = "message",
+) -> None:
+    session.add(
+        UserMemory(
+            user_id=user_id, content=content, vector_id=vector_id,
+            conversation_id=conversation_id, kind=kind,
+        )
+    )
+    await session.commit()
+
+
+async def count_user_messages(session: AsyncSession, user_id: int) -> int:
+    return await session.scalar(
+        select(func.count(TokenAudit.id)).where(
+            TokenAudit.user_id == user_id, TokenAudit.role == "user"
+        )
+    ) or 0
+
+
+async def recent_user_messages_text(session: AsyncSession, user_id: int, limit: int = 15) -> str:
+    result = await session.execute(
+        select(Message.content)
+        .where(Message.user_id == user_id, Message.role == "user")
+        .order_by(desc(Message.created_at))
+        .limit(limit)
+    )
+    return "\n".join(result.scalars().all())
 
 
 # ───────────────────── Per-user usage (computed from facts) ─────────────────

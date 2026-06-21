@@ -21,6 +21,13 @@ class Settings(BaseSettings):
     postgres_host: str = "db"
     postgres_port: int = 5432
 
+    # Vector store (Qdrant) for per-user personalization memory
+    qdrant_host: str = "qdrant"
+    qdrant_port: int = 6333
+    embed_model: str = "text-embedding-3-small"
+    embed_dim: int = 1536
+    personalization_topk: int = 4
+
     # App
     app_port: int = 8009
     default_model: str = "gpt-4o-mini"

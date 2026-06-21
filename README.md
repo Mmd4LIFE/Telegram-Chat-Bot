@@ -14,15 +14,22 @@ and a full **in-chat admin panel** for the owner.
 - 🖼 Vision — send a photo and the bot analyses it
 - 🎙 Voice — send a voice message, it's transcribed with Whisper and answered
 - 🎭 Personas — turn the assistant into a developer, teacher, writer, translator…
-- 🧠 Conversation memory (last N messages) with `🆕 New chat` to reset
+- 🧠 Conversation memory (last N messages) with `🆕 New chat` to start fresh
+- 📜 **Conversation history** — past chats are saved with an auto-generated recap
+  title; browse and resume them like the ChatGPT app
+- ✨ **Personalization** — a Qdrant vector engine remembers each user across
+  chats and tailors replies ("personalization is all you need")
 - 📊 Personal usage stats
 - Glassy UX: persistent `ReplyKeyboardMarkup` menu + inline "glass" keyboards
 
 **For the admin (Telegram ID `592354162`)** — everything is in the chat:
 - `🛠 Admin` button → stats, recent users, top users, broadcast
 - 📢 Broadcast to all users (with rate-limit-safe sending)
-- 👤 Inspect any user: `/user <id>` or `/find <username>` (full profile card)
+- 👤 Inspect any user: `/user <id>` or `/find <username>` (full profile card incl. tags)
 - 🚫 Ban / unban inline or via `/ban <id>` `/unban <id>`
+- 🏷 Segmentation tags / badges: `/tag <id> <tag>`, `/untag <id> <tag>`,
+  `/classify <id>` (LLM auto-classifies the user). Tags are also auto-suggested
+  every 8 messages.
 
 **Data** — a small **star schema** in PostgreSQL, managed by **Alembic**
 migrations (version-by-version):
@@ -30,12 +37,18 @@ migrations (version-by-version):
 | Table | Role | Holds |
 |---|---|---|
 | `users` | **dimension** | Telegram profile, language, premium, phone, admin/ban flags, persona — *descriptive attributes only, no measures* |
-| `messages` | content | conversation messages (pruned on "new chat") |
+| `conversations` | content | chat sessions with recap title; one is active per user |
+| `messages` | content | conversation messages, each with a `conversation_id` |
 | `model_selections` | **log** | one row per model change — the *current* model is the latest row |
 | `token_audits` | **fact** | per-message token accounting (prompt/completion/total) — durable, survives chat resets |
+| `user_tags` | **log** | segmentation badges per user (admin/auto) |
+| `user_memories` | log | relational mirror of vectors stored in Qdrant |
 | `broadcast_logs` | log | admin broadcast history |
 | `alembic_version` | — | Alembic's current head |
 | `migrations` | **log** | every migration applied, with timestamp + direction |
+
+Plus **Qdrant** (separate service, host `:6339`) holding per-user message
+embeddings for personalization.
 
 ### Migrations
 
@@ -96,10 +109,12 @@ docker compose down -v       # wipe the database too
 
 ```
 docker compose
-├── db    → postgres:16  (host :5439)
-└── app   → FastAPI (host :8009)
-            ├── /api/*          JSON backend (health, stats)
-            └── aiogram bot     long-polling, started in FastAPI lifespan
+├── db      → postgres:16   (host :5439)
+├── qdrant  → qdrant:1.12   (host :6339)  per-user personalization vectors
+└── app     → FastAPI (host :8009)
+              ├── /api/*          JSON backend (health, stats, version)
+              └── aiogram bot     long-polling, started in FastAPI lifespan
+                                  (runs Alembic migrations + Qdrant init first)
 ```
 
 Single container runs both the API and the bot, so one `up -d` is all you need.

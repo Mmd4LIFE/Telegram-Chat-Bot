@@ -15,6 +15,7 @@ from app.bot.states import AdminStates
 from app.config import settings
 from app.database import SessionLocal
 from app.services import crud
+from app.services.openai_service import classify_tags
 
 log = logging.getLogger(__name__)
 router = Router()
@@ -154,6 +155,8 @@ async def cmd_unban(message: TgMessage):
 async def _user_card(session, u) -> str:
     model = await crud.get_current_model(session, u)
     usage = await crud.user_usage(session, u.id)
+    tags = await crud.list_user_tags(session, u.id)
+    tag_str = " ".join(f"🏷{t.tag}" for t in tags) if tags else "—"
     return (
         f"👤 <b>{u.full_name}</b>\n"
         f"ID: <code>{u.telegram_id}</code>\n"
@@ -164,8 +167,55 @@ async def _user_card(session, u) -> str:
         f"Messages: {usage['messages']} · Images: {usage['images']}\n"
         f"Tokens: {usage['total_tokens']:,} "
         f"(in {usage['prompt_tokens']:,} / out {usage['completion_tokens']:,})\n"
+        f"Tags: {tag_str}\n"
         f"Banned: {u.is_banned} · Admin: {u.is_admin}\n"
         f"Joined: {u.created_at:%Y-%m-%d %H:%M} · Last seen: {u.last_active:%Y-%m-%d %H:%M}"
+    )
+
+
+@router.message(Command("tag"))
+async def cmd_tag(message: TgMessage):
+    parts = (message.text or "").split()
+    if len(parts) != 3 or not parts[1].lstrip("-").isdigit():
+        return await message.answer("Usage: <code>/tag &lt;telegram_id&gt; &lt;tag&gt;</code>")
+    async with SessionLocal() as session:
+        u = await crud.get_user_by_telegram_id(session, int(parts[1]))
+        if not u:
+            return await message.answer("User not found.")
+        added = await crud.add_user_tag(session, u.id, parts[2].lower(), source="admin")
+    await message.answer("✅ Tag added." if added else "Tag already present.")
+
+
+@router.message(Command("untag"))
+async def cmd_untag(message: TgMessage):
+    parts = (message.text or "").split()
+    if len(parts) != 3 or not parts[1].lstrip("-").isdigit():
+        return await message.answer("Usage: <code>/untag &lt;telegram_id&gt; &lt;tag&gt;</code>")
+    async with SessionLocal() as session:
+        u = await crud.get_user_by_telegram_id(session, int(parts[1]))
+        if not u:
+            return await message.answer("User not found.")
+        removed = await crud.remove_user_tag(session, u.id, parts[2].lower())
+    await message.answer("✅ Tag removed." if removed else "Tag not found.")
+
+
+@router.message(Command("classify"))
+async def cmd_classify(message: TgMessage):
+    parts = (message.text or "").split()
+    if len(parts) != 2 or not parts[1].lstrip("-").isdigit():
+        return await message.answer("Usage: <code>/classify &lt;telegram_id&gt;</code>")
+    async with SessionLocal() as session:
+        u = await crud.get_user_by_telegram_id(session, int(parts[1]))
+        if not u:
+            return await message.answer("User not found.")
+        transcript = await crud.recent_user_messages_text(session, u.id)
+        if not transcript.strip():
+            return await message.answer("No messages to classify yet.")
+        tags = await classify_tags(transcript)
+        for tag in tags:
+            await crud.add_user_tag(session, u.id, tag, source="auto")
+    await message.answer(
+        f"🤖 Auto-classified: {', '.join('🏷' + t for t in tags) if tags else 'no tags'}"
     )
 
 

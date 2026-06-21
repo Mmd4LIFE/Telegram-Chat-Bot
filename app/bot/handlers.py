@@ -1,6 +1,7 @@
 """Main bot message & callback handlers."""
 from __future__ import annotations
 
+import asyncio
 import html
 import io
 import logging
@@ -19,13 +20,15 @@ from app.bot.formatting import to_telegram_html
 from app.bot.texts import BANNED, HELP, WELCOME
 from app.config import settings
 from app.database import SessionLocal
-from app.services import crud
+from app.services import crud, vector_service
 from app.services.openai_service import (
     IMAGE_MODEL,
     chat_completion,
+    classify_tags,
     edit_image,
     generate_image,
     get_model_label,
+    summarize_title,
     transcribe_voice,
     vision_completion,
 )
@@ -63,14 +66,87 @@ async def cmd_new(message: TgMessage, state: FSMContext):
     await state.clear()
     async with SessionLocal() as session:
         user = await crud.get_or_create_user(session, message.from_user)
-        n = await crud.clear_context(session, user)
+        old = await crud.get_active_conversation(session, user)
+        await _maybe_title(session, old.id)            # recap the chat we're leaving
+        await crud.start_new_conversation(session, user)
         await crud.set_model(session, user, settings.default_model)  # back to default model
     await message.answer(
-        f"🆕 <b>Fresh start!</b> Cleared {n} messages from memory.\n"
+        "🆕 <b>New chat started.</b> Your previous chat was saved to 📜 History.\n"
         f"🤖 Model reset to {get_model_label(settings.default_model)}.\n"
         "What would you like to talk about?",
         reply_markup=kb.main_menu(user.is_admin),
     )
+
+
+async def _maybe_title(session, conversation_id: int) -> None:
+    """Generate a short recap title for a conversation if it has content."""
+    from app.models import Conversation
+
+    conv = await session.get(Conversation, conversation_id)
+    if not conv or conv.title:
+        return
+    transcript = await crud.conversation_transcript(session, conversation_id)
+    if not transcript.strip():
+        return
+    try:
+        title = await summarize_title(transcript)
+    except Exception:  # noqa: BLE001
+        title = transcript.split("\n", 1)[0][6:46] or "Chat"
+    await crud.set_conversation_title(session, conversation_id, title or "Chat")
+
+
+@router.message(Command("history"))
+@router.message(F.text == kb.BTN_HISTORY)
+async def cmd_history(message: TgMessage):
+    async with SessionLocal() as session:
+        user = await crud.get_or_create_user(session, message.from_user)
+        # ensure the active chat has a recap before showing the list
+        active = await crud.get_active_conversation(session, user)
+        await _maybe_title(session, active.id)
+        items = await crud.list_conversations(session, user, limit=10)
+    if not items:
+        return await message.answer(
+            "📜 You have no past conversations yet — start chatting!",
+            reply_markup=kb.main_menu(user.is_admin),
+        )
+    await message.answer(
+        "📜 <b>Your conversations</b>\nTap one to resume it:",
+        reply_markup=kb.conversations_kb(items),
+    )
+
+
+@router.callback_query(F.data == "conv:new")
+async def cb_conv_new(call: CallbackQuery, state: FSMContext):
+    await state.clear()
+    async with SessionLocal() as session:
+        user = await crud.get_or_create_user(session, call.from_user)
+        old = await crud.get_active_conversation(session, user)
+        await _maybe_title(session, old.id)
+        await crud.start_new_conversation(session, user)
+        await crud.set_model(session, user, settings.default_model)
+    await call.answer("New chat started")
+    try:
+        await call.message.edit_text("🆕 <b>New chat started.</b> Ask me anything!")
+    except Exception:  # noqa: BLE001
+        pass
+
+
+@router.callback_query(F.data.startswith("conv:"))
+async def cb_conv_open(call: CallbackQuery):
+    conv_id = int(call.data.split(":", 1)[1])
+    async with SessionLocal() as session:
+        user = await crud.get_or_create_user(session, call.from_user)
+        conv = await crud.set_active_conversation(session, user, conv_id)
+    if not conv:
+        return await call.answer("Conversation not found", show_alert=True)
+    await call.answer("Resumed")
+    title = conv.title or "this chat"
+    try:
+        await call.message.edit_text(
+            f"↩️ <b>Resumed:</b> {title}\nContinue where you left off — I remember the context."
+        )
+    except Exception:  # noqa: BLE001
+        pass
 
 
 @router.message(Command("models"))
@@ -353,11 +429,18 @@ async def _handle_chat(message: TgMessage, text: str, user_prefix: str = ""):
     await bot.send_chat_action(message.chat.id, ChatAction.TYPING)
     async with SessionLocal() as session:
         user = await crud.get_or_create_user(session, message.from_user)
-        await crud.save_message(session, user, "user", f"{user_prefix}{text}")
+        conv = await crud.get_active_conversation(session, user)
+        user_id, conv_id = user.id, conv.id
+        await crud.save_message(session, user, "user", f"{user_prefix}{text}", conversation_id=conv_id)
         context = await crud.get_context(session, user)
+        tags = [t.tag for t in await crud.list_user_tags(session, user.id)]
+
+    # ── Personalization: recall relevant memories from the vector engine ──
+    memories = await vector_service.recall(user_id, text)
+    augmented_prompt = _build_personalized_prompt(system_prompt, memories, tags)
 
     try:
-        result = await chat_completion(model, context, system_prompt)
+        result = await chat_completion(model, context, augmented_prompt)
     except Exception as e:  # noqa: BLE001
         log.exception("chat error")
         return await message.answer(
@@ -370,9 +453,48 @@ async def _handle_chat(message: TgMessage, text: str, user_prefix: str = ""):
         await crud.save_message(
             session, user, "assistant", result.text, model=result.model,
             prompt_tokens=result.prompt_tokens, completion_tokens=result.completion_tokens,
-            total_tokens=result.total_tokens,
+            total_tokens=result.total_tokens, conversation_id=conv_id,
         )
     await send_long(message.chat.id, to_telegram_html(result.text), reply_markup=kb.main_menu(is_admin))
+
+    # ── Learn from this turn in the background (never blocks the reply) ──
+    asyncio.create_task(_learn_from_turn(user_id, conv_id, text))
+
+
+def _build_personalized_prompt(system_prompt: str | None, memories: list[str], tags: list[str]) -> str:
+    parts: list[str] = []
+    if system_prompt:
+        parts.append(system_prompt)
+    if tags:
+        parts.append("User segmentation tags: " + ", ".join(tags) + ".")
+    if memories:
+        parts.append(
+            "What you remember about this user (use it to personalize, do not mention it):\n- "
+            + "\n- ".join(memories)
+        )
+    return "\n\n".join(parts) if parts else None
+
+
+async def _learn_from_turn(user_id: int, conv_id: int, text: str) -> None:
+    """Store this user message as personalization memory + occasionally re-tag."""
+    try:
+        vid = await vector_service.remember(user_id, text, conversation_id=conv_id, role="user")
+        async with SessionLocal() as session:
+            await crud.add_user_memory(
+                session, user_id, text, vector_id=vid, conversation_id=conv_id, kind="message"
+            )
+            count = await crud.count_user_messages(session, user_id)
+            # Re-segment the user every 8 messages.
+            if count and count % 8 == 0:
+                transcript = await crud.recent_user_messages_text(session, user_id)
+                try:
+                    suggested = await classify_tags(transcript)
+                except Exception:  # noqa: BLE001
+                    suggested = []
+                for tag in suggested:
+                    await crud.add_user_tag(session, user_id, tag, source="auto")
+    except Exception:  # noqa: BLE001
+        log.exception("learn_from_turn failed")
 
 
 def _admin_id() -> int:

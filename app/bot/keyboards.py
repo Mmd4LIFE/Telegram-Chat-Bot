@@ -11,6 +11,7 @@ from app.services.openai_service import CHAT_MODELS, IMAGE_MODEL
 
 # ───── Buttons (labels) used in the persistent reply keyboard ─────
 BTN_NEW_CHAT = "🆕 New chat"
+BTN_HISTORY = "📜 History"
 BTN_MODELS = "🤖 Models"
 BTN_IMAGE = "🎨 Image"
 BTN_PERSONA = "🎭 Persona"
@@ -21,12 +22,25 @@ BTN_ADMIN = "🛠 Admin"
 
 def main_menu(is_admin: bool = False) -> ReplyKeyboardMarkup:
     kb = ReplyKeyboardBuilder()
-    kb.row(KeyboardButton(text=BTN_NEW_CHAT), KeyboardButton(text=BTN_MODELS))
-    kb.row(KeyboardButton(text=BTN_IMAGE), KeyboardButton(text=BTN_PERSONA))
-    kb.row(KeyboardButton(text=BTN_STATS), KeyboardButton(text=BTN_HELP))
+    kb.row(KeyboardButton(text=BTN_NEW_CHAT), KeyboardButton(text=BTN_HISTORY))
+    kb.row(KeyboardButton(text=BTN_MODELS), KeyboardButton(text=BTN_IMAGE))
+    kb.row(KeyboardButton(text=BTN_PERSONA), KeyboardButton(text=BTN_STATS))
+    kb.row(KeyboardButton(text=BTN_HELP))
     if is_admin:
         kb.row(KeyboardButton(text=BTN_ADMIN))
     return kb.as_markup(resize_keyboard=True, input_field_placeholder="Ask me anything…")
+
+
+def conversations_kb(items) -> InlineKeyboardMarkup:
+    """`items` is a list of (Conversation, message_count). Glass list of past chats."""
+    kb = InlineKeyboardBuilder()
+    for conv, count in items:
+        title = conv.title or "Untitled chat"
+        active = "🟢 " if conv.is_active else ""
+        label = f"{active}{title} · {count} msgs"
+        kb.row(InlineKeyboardButton(text=label[:60], callback_data=f"conv:{conv.id}"))
+    kb.row(InlineKeyboardButton(text="🆕 Start new chat", callback_data="conv:new"))
+    return kb.as_markup()
 
 
 def share_contact_kb() -> ReplyKeyboardMarkup:
