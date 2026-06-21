@@ -34,6 +34,9 @@ class User(Base):
     phone_number: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
     # App-level state (attributes, not measures)
+    # `is_active` = the user has actually started/used the bot directly. Members
+    # discovered via group logging are created as NON-active until they DM the bot.
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
     is_banned: Mapped[bool] = mapped_column(Boolean, default=False)
     system_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)

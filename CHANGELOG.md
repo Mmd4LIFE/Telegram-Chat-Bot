@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-06-21
+
+### Added
+- `users.is_active` flag. Group members are now **force-created as non-active
+  users** the first moment they're seen in a group, so each has an internal id
+  immediately (emoji stats + vector memory work right away). They're promoted to
+  active the moment they DM the bot (migration `0006`).
+- Group messages also store the **raw Telegram identity** (`telegram_user_id`,
+  `username`, `first_name`) so no message is ever lost regardless of user state
+  (migration `0005`).
+- Admin stats now show "started / known" user counts; user card shows
+  `Started bot`.
+
+### Changed
+- Broadcasts only target **active** users (the bot cannot message people who
+  never started it).
+
 ## [0.5.0] - 2026-06-21
 
 ### Added
@@ -119,7 +136,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Telegram ID.
 - Dockerised: `docker compose up -d` (app `:8009`, db `:5439`).
 
-[Unreleased]: https://github.com/Mmd4LIFE/Telegram-Chat-Bot/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/Mmd4LIFE/Telegram-Chat-Bot/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/Mmd4LIFE/Telegram-Chat-Bot/releases/tag/v0.5.1
 [0.5.0]: https://github.com/Mmd4LIFE/Telegram-Chat-Bot/releases/tag/v0.5.0
 [0.4.0]: https://github.com/Mmd4LIFE/Telegram-Chat-Bot/releases/tag/v0.4.0
 [0.3.0]: https://github.com/Mmd4LIFE/Telegram-Chat-Bot/releases/tag/v0.3.0

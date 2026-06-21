@@ -113,10 +113,14 @@ async def on_group_message(message: TgMessage):
     try:
         group_id = await _group_id(message.chat)
         mtype, text, file_id, sticker_emoji, duration = _classify(message)
+        tg = message.from_user
 
-        # Resolve/refresh the user so group + DM personalization share one profile.
+        # Force-create the sender as a NON-active user (they haven't started the
+        # bot yet). This gives every group member an internal id immediately, so
+        # emoji stats and vector memory work right away; they're promoted to
+        # active once they DM the bot.
         async with SessionLocal() as session:
-            user = await crud.get_or_create_user(session, message.from_user)
+            user = await crud.get_or_create_user(session, tg, active=False)
             user_id = user.id
 
         # Voice / round-video → transcribe (best-effort, length-capped).
@@ -132,6 +136,9 @@ async def on_group_message(message: TgMessage):
         async with SessionLocal() as session:
             await group_crud.save_group_message(
                 session, group_id,
+                telegram_user_id=tg.id,
+                username=tg.username,
+                first_name=tg.first_name,
                 user_id=user_id,
                 telegram_message_id=message.message_id,
                 message_type=mtype,
@@ -145,7 +152,6 @@ async def on_group_message(message: TgMessage):
             if emoji_list:
                 await group_crud.increment_emojis(session, user_id, emoji_list)
 
-        # Feed personalization memory from meaningful language.
         learn_text = transcription or (text if mtype == "text" else None)
         if learn_text and len(learn_text.strip()) >= 8:
             vid = await vector_service.remember(user_id, learn_text, role="group")

@@ -44,7 +44,10 @@ async def save_group_message(
     session: AsyncSession,
     group_id: int,
     *,
-    user_id: int | None,
+    telegram_user_id: int | None,
+    username: str | None = None,
+    first_name: str | None = None,
+    user_id: int | None = None,
     telegram_message_id: int | None,
     message_type: str,
     text: str | None = None,
@@ -56,6 +59,9 @@ async def save_group_message(
 ) -> GroupMessage:
     gm = GroupMessage(
         group_id=group_id,
+        telegram_user_id=telegram_user_id,
+        username=username,
+        first_name=first_name,
         user_id=user_id,
         telegram_message_id=telegram_message_id,
         message_type=message_type,

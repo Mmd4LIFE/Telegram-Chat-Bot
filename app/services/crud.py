@@ -19,8 +19,13 @@ from app.models import (
 )
 
 
-async def get_or_create_user(session: AsyncSession, tg_user) -> User:
-    """Fetch a user by telegram id, creating/refreshing their profile."""
+async def get_or_create_user(session: AsyncSession, tg_user, *, active: bool = True) -> User:
+    """Fetch a user by telegram id, creating/refreshing their profile.
+
+    `active=False` is used when we discover a member purely via group logging:
+    the user row is created but flagged non-active until they DM the bot. A later
+    direct interaction (`active=True`) promotes them to active.
+    """
     result = await session.execute(select(User).where(User.telegram_id == tg_user.id))
     user = result.scalar_one_or_none()
 
@@ -35,6 +40,7 @@ async def get_or_create_user(session: AsyncSession, tg_user) -> User:
             language_code=tg_user.language_code,
             is_bot=bool(tg_user.is_bot),
             is_premium=bool(getattr(tg_user, "is_premium", False)),
+            is_active=active,
             is_admin=is_admin,
         )
         session.add(user)
@@ -52,6 +58,8 @@ async def get_or_create_user(session: AsyncSession, tg_user) -> User:
     user.last_name = tg_user.last_name
     user.language_code = tg_user.language_code
     user.is_premium = bool(getattr(tg_user, "is_premium", False))
+    if active and not user.is_active:
+        user.is_active = True  # promote: they've now used the bot directly
     if is_admin:
         user.is_admin = True
     await session.commit()
@@ -374,7 +382,12 @@ async def set_banned(session: AsyncSession, telegram_id: int, banned: bool) -> b
 
 
 async def all_user_ids(session: AsyncSession) -> list[int]:
-    result = await session.execute(select(User.telegram_id).where(User.is_banned == False))  # noqa: E712
+    # Only users who actually started the bot can be messaged (and not banned).
+    result = await session.execute(
+        select(User.telegram_id).where(
+            User.is_banned == False, User.is_active == True  # noqa: E712
+        )
+    )
     return [r for r in result.scalars().all()]
 
 
@@ -388,6 +401,9 @@ async def get_stats(session: AsyncSession) -> dict:
     week_ago = datetime.now(timezone.utc) - timedelta(days=7)
 
     total_users = await session.scalar(select(func.count(User.id)))
+    started_users = await session.scalar(
+        select(func.count(User.id)).where(User.is_active == True)  # noqa: E712
+    )
     banned_users = await session.scalar(select(func.count(User.id)).where(User.is_banned == True))  # noqa: E712
     active_24h = await session.scalar(
         select(func.count(User.id)).where(User.last_active >= day_ago)
@@ -402,6 +418,7 @@ async def get_stats(session: AsyncSession) -> dict:
 
     return {
         "total_users": total_users or 0,
+        "started_users": started_users or 0,
         "banned_users": banned_users or 0,
         "active_24h": active_24h or 0,
         "new_24h": new_24h or 0,

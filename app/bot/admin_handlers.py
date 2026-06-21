@@ -45,7 +45,8 @@ async def _stats_text() -> str:
         g = await group_crud.group_stats(session)
     return (
         "📊 <b>Bot statistics</b>\n\n"
-        f"👥 Total users: <b>{s['total_users']}</b>\n"
+        f"👥 Users: <b>{s['started_users']}</b> started / {s['total_users']} known "
+        "<i>(incl. group-only)</i>\n"
         f"🟢 Active (24h): <b>{s['active_24h']}</b>\n"
         f"🆕 New (24h): <b>{s['new_24h']}</b>\n"
         f"📈 New (7d): <b>{s['new_7d']}</b>\n"
@@ -171,7 +172,7 @@ async def _user_card(session, u) -> str:
         f"Tokens: {usage['total_tokens']:,} "
         f"(in {usage['prompt_tokens']:,} / out {usage['completion_tokens']:,})\n"
         f"Tags: {tag_str}\n"
-        f"Banned: {u.is_banned} · Admin: {u.is_admin}\n"
+        f"Started bot: {u.is_active} · Banned: {u.is_banned} · Admin: {u.is_admin}\n"
         f"Joined: {u.created_at:%Y-%m-%d %H:%M} · Last seen: {u.last_active:%Y-%m-%d %H:%M}"
     )
 
