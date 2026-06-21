@@ -22,7 +22,10 @@ HELP = (
     "You can also:\n"
     "• Send a <b>photo + a caption/prompt</b> → choose 🎨 Transform (redraw it your way, "
     "e.g. <i>“draw me as a chaotic fan-art sketchbook page”</i>) or 👁 Describe.\n"
-    "• Send a <b>voice message</b> → I'll transcribe & answer.\n\n"
+    "• Send a <b>voice message</b> → I'll transcribe & answer.\n"
+    "• Send a <b>music file</b> 🎵 → I'll fetch its <b>lyrics</b>.\n"
+    "• Start a message with <b>@web</b> → I'll <b>search the web</b> and summarize, "
+    "e.g. <code>@web latest AI news</code>.\n\n"
     "Commands: /start /help /new /models /stats"
 )
 

@@ -6,13 +6,20 @@ import html
 import io
 import logging
 import os
+import re
 import tempfile
 
 from aiogram import F, Router
 from aiogram.enums import ChatAction
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
-from aiogram.types import BufferedInputFile, CallbackQuery, Contact, Message as TgMessage
+from aiogram.types import (
+    BufferedInputFile,
+    CallbackQuery,
+    Contact,
+    LinkPreviewOptions,
+    Message as TgMessage,
+)
 
 from app.bot import keyboards as kb
 from app.bot.bot import bot, send_long
@@ -20,7 +27,8 @@ from app.bot.formatting import to_telegram_html
 from app.bot.texts import BANNED, HELP, WELCOME
 from app.config import settings
 from app.database import SessionLocal
-from app.services import crud, group_crud, vector_service
+from app.services import crud, group_crud, vector_service, web_search
+from app.services.lyrics_service import fetch_lyrics
 from app.utils.emoji import extract_emojis
 from app.services.openai_service import (
     IMAGE_MODEL,
@@ -370,40 +378,132 @@ async def cb_img_describe(call: CallbackQuery, state: FSMContext):
     await _describe_photo(call.message.chat.id, call.from_user, file_id, prompt)
 
 
-@router.message(F.voice | F.audio)
+@router.message(F.voice)
 async def on_voice(message: TgMessage):
+    """Voice message → transcribe → treat as a chat prompt."""
     async with SessionLocal() as session:
         user = await crud.get_or_create_user(session, message.from_user)
         if user.is_banned:
             return await message.answer(BANNED)
 
     await bot.send_chat_action(message.chat.id, ChatAction.TYPING)
-    voice = message.voice or message.audio
-    file = await bot.get_file(voice.file_id)
+    text = await _download_and_transcribe(message.voice.file_id)
+    if text is None:
+        return await message.answer("⚠️ Could not transcribe your voice message.")
+    await message.answer(f"🎙 <i>You said:</i> {html.escape(text)}")
+    await _handle_chat(message, text, user_prefix="[voice] ")
 
+
+@router.message(F.audio)
+async def on_audio(message: TgMessage):
+    """Music file → extract lyrics (lyrics.ovh by metadata, else Whisper)."""
+    async with SessionLocal() as session:
+        user = await crud.get_or_create_user(session, message.from_user)
+        if user.is_banned:
+            return await message.answer(BANNED)
+        is_admin = user.is_admin
+
+    audio = message.audio
+    performer = audio.performer
+    title = audio.title or (audio.file_name or "").rsplit(".", 1)[0] or None
+
+    await bot.send_chat_action(message.chat.id, ChatAction.TYPING)
+    await message.answer("🎼 Looking up the lyrics…")
+
+    lyrics = await fetch_lyrics(performer, title) if (performer and title) else None
+    source = "📚 lyrics database"
+    if not lyrics:
+        transcribed = await _download_and_transcribe(audio.file_id)
+        if transcribed:
+            lyrics, source = transcribed, "🎤 AI transcription of the audio"
+
+    if not lyrics:
+        return await message.answer(
+            "😕 I couldn't find or extract lyrics for this track.\n"
+            "<i>Tip: files with correct Title + Artist tags work best.</i>",
+            reply_markup=kb.main_menu(is_admin),
+        )
+
+    head = f"🎵 <b>{html.escape(title or 'Lyrics')}</b>"
+    if performer:
+        head += f" — {html.escape(performer)}"
+    head += f"\n<i>{source}</i>\n\n"
+
+    async with SessionLocal() as session:
+        user = await crud.get_or_create_user(session, message.from_user)
+        await crud.save_message(
+            session, user, "user", f"[music] {performer or ''} - {title or ''}", content_type="voice"
+        )
+        await crud.save_message(session, user, "assistant", lyrics, content_type="voice")
+    await send_long(message.chat.id, head + html.escape(lyrics), reply_markup=kb.main_menu(is_admin))
+
+
+async def _download_and_transcribe(file_id: str) -> str | None:
+    file = await bot.get_file(file_id)
     tmp_path = None
     try:
         suffix = os.path.splitext(file.file_path)[1] or ".oga"
         fd, tmp_path = tempfile.mkstemp(suffix=suffix)
         os.close(fd)
         await bot.download_file(file.file_path, tmp_path)
-        text = await transcribe_voice(tmp_path)
-    except Exception as e:  # noqa: BLE001
-        log.exception("voice error")
-        return await message.answer(f"⚠️ Could not transcribe audio: {e}")
+        return await transcribe_voice(tmp_path)
+    except Exception:  # noqa: BLE001
+        log.exception("transcription error")
+        return None
     finally:
         if tmp_path and os.path.exists(tmp_path):
             os.remove(tmp_path)
-
-    await message.answer(f"🎙 <i>You said:</i> {text}")
-    await _handle_chat(message, text, user_prefix="[voice] ")
 
 
 # ───────────────────────── Main chat / catch-all ────────────────
 
 @router.message(F.text)
 async def on_text(message: TgMessage):
+    if "@web" in message.text.lower():
+        return await _handle_web(message)
     await _handle_chat(message, message.text)
+
+
+async def _handle_web(message: TgMessage):
+    async with SessionLocal() as session:
+        user = await crud.get_or_create_user(session, message.from_user)
+        if user.is_banned:
+            return await message.answer(BANNED)
+        is_admin = user.is_admin
+
+    query = re.sub(r"@web", "", message.text, flags=re.IGNORECASE).strip()
+    if not query:
+        return await message.answer(
+            "🔎 <b>Web search</b>\nUsage: <code>@web your question</code>\n"
+            "Example: <code>@web latest news about AI</code>"
+        )
+
+    await bot.send_chat_action(message.chat.id, ChatAction.TYPING)
+    await message.answer(f"🔎 Searching the web for: <i>{html.escape(query)}</i>…")
+
+    result = await web_search.answer(query)
+    if not result:
+        return await message.answer(
+            "😕 I couldn't fetch web results right now. Please try again shortly.",
+            reply_markup=kb.main_menu(is_admin),
+        )
+    answer_text, results = result
+
+    sources = "\n".join(
+        f"{i + 1}. <a href=\"{html.escape(r['href'])}\">{html.escape(r['title'][:80] or r['href'])}</a>"
+        for i, r in enumerate(results[:5])
+        if r["href"]
+    )
+    body = to_telegram_html(answer_text)
+    if sources:
+        body += "\n\n🔗 <b>Sources</b>\n" + sources
+
+    async with SessionLocal() as session:
+        user = await crud.get_or_create_user(session, message.from_user)
+        await crud.save_message(session, user, "user", f"[@web] {query}")
+        await crud.save_message(session, user, "assistant", answer_text, model="web-search")
+    await send_long(message.chat.id, body, reply_markup=kb.main_menu(is_admin),
+                    link_preview_options=LinkPreviewOptions(is_disabled=True))
 
 
 async def _handle_chat(message: TgMessage, text: str, user_prefix: str = ""):

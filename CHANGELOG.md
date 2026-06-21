@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-06-21
+
+### Added
+- **Lyrics extraction** — send a music file and the bot returns its lyrics:
+  first via the free lyrics.ovh API (using the file's performer/title tags),
+  falling back to Whisper transcription of the audio when no match is found.
+  Audio files (`F.audio`) are now handled separately from voice notes.
+- **`@web` web search** — start a message with `@web` and the bot searches the
+  web (DuckDuckGo, free/no key), summarizes the results with the LLM, and replies
+  with the answer plus source links. Best-effort with graceful failure.
+
+### Changed
+- Voice notes and music files are now routed to different handlers (transcribe &
+  chat vs. lyrics extraction).
+
 ## [0.6.0] - 2026-06-21
 
 ### Added
@@ -149,7 +164,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Telegram ID.
 - Dockerised: `docker compose up -d` (app `:8009`, db `:5439`).
 
-[Unreleased]: https://github.com/Mmd4LIFE/Telegram-Chat-Bot/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/Mmd4LIFE/Telegram-Chat-Bot/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/Mmd4LIFE/Telegram-Chat-Bot/releases/tag/v0.7.0
 [0.6.0]: https://github.com/Mmd4LIFE/Telegram-Chat-Bot/releases/tag/v0.6.0
 [0.5.1]: https://github.com/Mmd4LIFE/Telegram-Chat-Bot/releases/tag/v0.5.1
 [0.5.0]: https://github.com/Mmd4LIFE/Telegram-Chat-Bot/releases/tag/v0.5.0

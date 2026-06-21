@@ -21,6 +21,12 @@ class Settings(BaseSettings):
     postgres_host: str = "db"
     postgres_port: int = 5432
 
+    # Web search (@web). If a Google Programmable Search key + engine id are set,
+    # Google is used (reliable); otherwise it falls back to DuckDuckGo (no key,
+    # but can be rate-limited from server IPs).
+    google_api_key: str = ""
+    google_cx: str = ""
+
     # Vector store (Qdrant) for per-user personalization memory
     qdrant_host: str = "qdrant"
     qdrant_port: int = 6333

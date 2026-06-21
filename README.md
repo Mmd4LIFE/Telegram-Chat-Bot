@@ -13,6 +13,9 @@ and a full **in-chat admin panel** for the owner.
   "draw me as a chaotic fan-art sketchbook page") and pick 🎨 Transform
 - 🖼 Vision — send a photo and the bot analyses it
 - 🎙 Voice — send a voice message, it's transcribed with Whisper and answered
+- 🎵 Lyrics — send a music file and get its lyrics (LRCLIB by tags, else Whisper)
+- 🔎 `@web` — start a message with `@web` to search the web and get an AI summary
+  with source links
 - 🎭 Personas — turn the assistant into a developer, teacher, writer, translator…
 - 🧠 Conversation memory (last N messages) with `🆕 New chat` to start fresh
 - 📜 **Conversation history** — past chats are saved with an auto-generated recap
@@ -121,6 +124,13 @@ By default Telegram bots only receive group messages that mention them
 Then remove & re-add the bot to the group. The bot logs every message type and
 uses it to personalize each member; it posts a one-time notice when added so the
 group is aware.
+
+### Web search (`@web`)
+
+`@web <question>` searches the web, summarizes with the LLM, and replies with
+source links. For **reliable** results set `GOOGLE_API_KEY` + `GOOGLE_CX` in
+`.env` (Google Programmable Search, free 100 queries/day). Without them it falls
+back to DuckDuckGo, which works but can be rate-limited from server IPs.
 
 ## 🏗 Architecture
 
