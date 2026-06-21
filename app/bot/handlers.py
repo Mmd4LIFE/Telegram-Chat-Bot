@@ -78,9 +78,10 @@ async def cmd_new(message: TgMessage, state: FSMContext):
 async def cmd_models(message: TgMessage):
     async with SessionLocal() as session:
         user = await crud.get_or_create_user(session, message.from_user)
+        current = await crud.get_current_model(session, user)
     await message.answer(
-        f"🤖 <b>Choose your AI model</b>\nCurrent: {get_model_label(user.selected_model)}",
-        reply_markup=kb.models_kb(user.selected_model),
+        f"🤖 <b>Choose your AI model</b>\nCurrent: {get_model_label(current)}",
+        reply_markup=kb.models_kb(current),
     )
 
 
@@ -106,12 +107,14 @@ async def cmd_persona(message: TgMessage):
 async def cmd_stats(message: TgMessage):
     async with SessionLocal() as session:
         user = await crud.get_or_create_user(session, message.from_user)
+        current = await crud.get_current_model(session, user)
+        usage = await crud.user_usage(session, user.id)
     txt = (
         "📊 <b>Your stats</b>\n\n"
-        f"🤖 Model: {get_model_label(user.selected_model)}\n"
-        f"💬 Messages: <b>{user.message_count}</b>\n"
-        f"🎨 Images: <b>{user.image_count}</b>\n"
-        f"🔢 Tokens used: <b>{user.total_tokens:,}</b>\n"
+        f"🤖 Model: {get_model_label(current)}\n"
+        f"💬 Messages: <b>{usage['messages']}</b>\n"
+        f"🎨 Images: <b>{usage['images']}</b>\n"
+        f"🔢 Tokens used: <b>{usage['total_tokens']:,}</b>\n"
         f"📅 Member since: {user.created_at:%Y-%m-%d}"
     )
     await message.answer(txt, reply_markup=kb.main_menu(user.is_admin))
@@ -200,7 +203,7 @@ async def _describe_photo(chat_id: int, tg_user, file_id: str, prompt: str):
     await bot.send_chat_action(chat_id, ChatAction.TYPING)
     async with SessionLocal() as session:
         user = await crud.get_or_create_user(session, tg_user)
-        model = user.selected_model
+        model = await crud.get_current_model(session, user)
         is_admin = user.is_admin
 
     file = await bot.get_file(file_id)
@@ -322,7 +325,7 @@ async def _handle_chat(message: TgMessage, text: str, user_prefix: str = ""):
         user = await crud.get_or_create_user(session, message.from_user)
         if user.is_banned:
             return await message.answer(BANNED)
-        model = user.selected_model
+        model = await crud.get_current_model(session, user)
         system_prompt = user.system_prompt
         is_admin = user.is_admin
 

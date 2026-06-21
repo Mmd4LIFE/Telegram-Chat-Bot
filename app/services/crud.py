@@ -1,13 +1,19 @@
-"""Database access helpers."""
+"""Database access helpers (star-schema aware)."""
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import desc, func, select, update
+from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.models import BroadcastLog, Message, User
+from app.models import (
+    BroadcastLog,
+    Message,
+    ModelSelection,
+    TokenAudit,
+    User,
+)
 
 
 async def get_or_create_user(session: AsyncSession, tg_user) -> User:
@@ -27,14 +33,15 @@ async def get_or_create_user(session: AsyncSession, tg_user) -> User:
             is_bot=bool(tg_user.is_bot),
             is_premium=bool(getattr(tg_user, "is_premium", False)),
             is_admin=is_admin,
-            selected_model=settings.default_model,
         )
         session.add(user)
+        await session.flush()
+        # seed the initial model selection so the user has a "current" model
+        session.add(ModelSelection(user_id=user.id, model=settings.default_model))
         await session.commit()
         await session.refresh(user)
         return user
 
-    # keep the profile fresh on every interaction
     user.username = tg_user.username
     user.first_name = tg_user.first_name
     user.last_name = tg_user.last_name
@@ -46,8 +53,23 @@ async def get_or_create_user(session: AsyncSession, tg_user) -> User:
     return user
 
 
+# ───────────────────────── Model selection (log) ─────────────────────────
+
+async def get_current_model(session: AsyncSession, user: User) -> str:
+    """Current model = most recent model_selections row for the user."""
+    result = await session.execute(
+        select(ModelSelection.model)
+        .where(ModelSelection.user_id == user.id)
+        .order_by(desc(ModelSelection.created_at), desc(ModelSelection.id))
+        .limit(1)
+    )
+    model = result.scalar_one_or_none()
+    return model or settings.default_model
+
+
 async def set_model(session: AsyncSession, user: User, model: str) -> None:
-    user.selected_model = model
+    """Record a model choice (append-only log)."""
+    session.add(ModelSelection(user_id=user.id, model=model))
     await session.commit()
 
 
@@ -60,6 +82,8 @@ async def set_system_prompt(session: AsyncSession, user: User, prompt: str | Non
     user.system_prompt = prompt
     await session.commit()
 
+
+# ───────────────────────── Messages + token audit ─────────────────────────
 
 async def save_message(
     session: AsyncSession,
@@ -74,26 +98,30 @@ async def save_message(
     total_tokens: int = 0,
     telegram_message_id: int | None = None,
 ) -> Message:
+    """Persist conversation content (messages) AND a durable token audit row."""
     msg = Message(
         user_id=user.id,
         role=role,
         content=content,
         content_type=content_type,
         model=model,
-        prompt_tokens=prompt_tokens,
-        completion_tokens=completion_tokens,
-        tokens=total_tokens,
         telegram_message_id=telegram_message_id,
     )
     session.add(msg)
+    await session.flush()  # obtain msg.id
 
-    user.message_count += 1
-    user.total_tokens += total_tokens
-    user.prompt_tokens += prompt_tokens
-    user.completion_tokens += completion_tokens
-    if content_type == "image":
-        user.image_count += 1
-
+    session.add(
+        TokenAudit(
+            user_id=user.id,
+            message_id=msg.id,
+            role=role,
+            content_type=content_type,
+            model=model,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=total_tokens,
+        )
+    )
     await session.commit()
     return msg
 
@@ -116,7 +144,11 @@ async def get_context(session: AsyncSession, user: User) -> list[dict]:
 
 
 async def clear_context(session: AsyncSession, user: User) -> int:
-    """Soft-clear: delete a user's messages so context starts fresh."""
+    """Delete a user's messages so context starts fresh.
+
+    Token audits persist (their message_id is set NULL by the FK), so usage
+    history is preserved.
+    """
     result = await session.execute(select(Message).where(Message.user_id == user.id))
     msgs = result.scalars().all()
     count = len(msgs)
@@ -126,7 +158,34 @@ async def clear_context(session: AsyncSession, user: User) -> int:
     return count
 
 
-# ───────────────────────── Admin / stats ─────────────────────────
+# ───────────────────── Per-user usage (computed from facts) ─────────────────
+
+async def user_usage(session: AsyncSession, user_id: int) -> dict:
+    row = (
+        await session.execute(
+            select(
+                func.count(TokenAudit.id),
+                func.coalesce(func.sum(TokenAudit.total_tokens), 0),
+                func.coalesce(func.sum(TokenAudit.prompt_tokens), 0),
+                func.coalesce(func.sum(TokenAudit.completion_tokens), 0),
+            ).where(TokenAudit.user_id == user_id)
+        )
+    ).one()
+    images = await session.scalar(
+        select(func.count(TokenAudit.id)).where(
+            TokenAudit.user_id == user_id, TokenAudit.content_type == "image"
+        )
+    )
+    return {
+        "messages": row[0] or 0,
+        "total_tokens": row[1] or 0,
+        "prompt_tokens": row[2] or 0,
+        "completion_tokens": row[3] or 0,
+        "images": images or 0,
+    }
+
+
+# ───────────────────────────── Admin / stats ─────────────────────────────
 
 async def get_user_by_telegram_id(session: AsyncSession, telegram_id: int) -> User | None:
     result = await session.execute(select(User).where(User.telegram_id == telegram_id))
@@ -163,9 +222,11 @@ async def get_stats(session: AsyncSession) -> dict:
     )
     new_24h = await session.scalar(select(func.count(User.id)).where(User.created_at >= day_ago))
     new_7d = await session.scalar(select(func.count(User.id)).where(User.created_at >= week_ago))
-    total_messages = await session.scalar(select(func.count(Message.id)))
-    total_tokens = await session.scalar(select(func.coalesce(func.sum(User.total_tokens), 0)))
-    total_images = await session.scalar(select(func.coalesce(func.sum(User.image_count), 0)))
+    total_messages = await session.scalar(select(func.count(TokenAudit.id)))
+    total_tokens = await session.scalar(select(func.coalesce(func.sum(TokenAudit.total_tokens), 0)))
+    total_images = await session.scalar(
+        select(func.count(TokenAudit.id)).where(TokenAudit.content_type == "image")
+    )
 
     return {
         "total_users": total_users or 0,
@@ -186,31 +247,23 @@ async def list_users(session: AsyncSession, limit: int = 100, offset: int = 0) -
     return list(result.scalars().all())
 
 
-async def list_top_users(session: AsyncSession, limit: int = 10) -> list[User]:
-    result = await session.execute(
-        select(User).order_by(desc(User.message_count)).limit(limit)
+async def list_top_users(session: AsyncSession, limit: int = 10) -> list[tuple[User, int, int]]:
+    """Top users by activity → (user, message_count, total_tokens)."""
+    rows = await session.execute(
+        select(
+            User,
+            func.count(TokenAudit.id).label("msgs"),
+            func.coalesce(func.sum(TokenAudit.total_tokens), 0).label("tokens"),
+        )
+        .join(TokenAudit, TokenAudit.user_id == User.id)
+        .group_by(User.id)
+        .order_by(desc("msgs"))
+        .limit(limit)
     )
-    return list(result.scalars().all())
+    return [(u, int(m), int(t)) for u, m, t in rows.all()]
 
 
 async def find_user_by_username(session: AsyncSession, username: str) -> User | None:
     username = username.lstrip("@")
     result = await session.execute(select(User).where(func.lower(User.username) == username.lower()))
     return result.scalar_one_or_none()
-
-
-async def list_messages(session: AsyncSession, limit: int = 200) -> list[Message]:
-    result = await session.execute(
-        select(Message).order_by(desc(Message.created_at)).limit(limit)
-    )
-    return list(result.scalars().all())
-
-
-async def get_user_with_messages(session: AsyncSession, user_id: int) -> tuple[User | None, list[Message]]:
-    user = await session.get(User, user_id)
-    if not user:
-        return None, []
-    result = await session.execute(
-        select(Message).where(Message.user_id == user_id).order_by(desc(Message.created_at)).limit(200)
-    )
-    return user, list(result.scalars().all())

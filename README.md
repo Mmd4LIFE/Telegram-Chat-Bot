@@ -24,9 +24,34 @@ and a full **in-chat admin panel** for the owner.
 - 👤 Inspect any user: `/user <id>` or `/find <username>` (full profile card)
 - 🚫 Ban / unban inline or via `/ban <id>` `/unban <id>`
 
-**Data** — every user and every message is stored in PostgreSQL
-(`users` + `messages` tables): Telegram profile, language, premium flag, phone
-(if shared), selected model, token usage, image count, timestamps, and more.
+**Data** — a small **star schema** in PostgreSQL, managed by **Alembic**
+migrations (version-by-version):
+
+| Table | Role | Holds |
+|---|---|---|
+| `users` | **dimension** | Telegram profile, language, premium, phone, admin/ban flags, persona — *descriptive attributes only, no measures* |
+| `messages` | content | conversation messages (pruned on "new chat") |
+| `model_selections` | **log** | one row per model change — the *current* model is the latest row |
+| `token_audits` | **fact** | per-message token accounting (prompt/completion/total) — durable, survives chat resets |
+| `broadcast_logs` | log | admin broadcast history |
+| `alembic_version` | — | Alembic's current head |
+| `migrations` | **log** | every migration applied, with timestamp + direction |
+
+### Migrations
+
+Migrations run automatically on startup (`alembic upgrade head` inside the app
+lifespan), so `docker compose up -d` always brings the DB to the latest version.
+Every applied revision is also recorded in the `migrations` table.
+
+Create a new version after changing models:
+
+```bash
+docker compose exec app alembic revision --autogenerate -m "describe change"
+# review the generated file in alembic/versions/, then it applies on next start
+docker compose exec app alembic upgrade head     # or just restart
+docker compose exec app alembic history          # see all versions
+docker compose exec app alembic downgrade -1     # roll back one version
+```
 
 ## 🚀 Run it
 

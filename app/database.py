@@ -1,6 +1,7 @@
 """Async SQLAlchemy engine, session factory and declarative base."""
 from collections.abc import AsyncGenerator
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
@@ -30,9 +31,7 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
         yield session
 
 
-async def init_db() -> None:
-    """Create all tables on startup (idempotent)."""
-    from app import models  # noqa: F401  (ensure models are imported)
-
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+async def ping() -> None:
+    """Raise if the database is not reachable yet."""
+    async with engine.connect() as conn:
+        await conn.execute(text("SELECT 1"))

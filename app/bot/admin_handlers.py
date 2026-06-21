@@ -69,7 +69,7 @@ async def cb_admin_users(call: CallbackQuery):
     for u in users:
         uname = f"@{u.username}" if u.username else "—"
         flag = "🚫" if u.is_banned else ("👑" if u.is_admin else "👤")
-        lines.append(f"{flag} <code>{u.telegram_id}</code> {uname} · {u.message_count} msgs")
+        lines.append(f"{flag} <code>{u.telegram_id}</code> {uname} · {u.full_name}")
     lines.append("\n<i>Inspect anyone with /user &lt;id&gt; or /find &lt;username&gt;</i>")
     await call.message.answer("\n".join(lines))
 
@@ -78,13 +78,13 @@ async def cb_admin_users(call: CallbackQuery):
 async def cb_admin_top(call: CallbackQuery):
     await call.answer()
     async with SessionLocal() as session:
-        users = await crud.list_top_users(session, limit=10)
+        rows = await crud.list_top_users(session, limit=10)
     lines = ["🏆 <b>Top users by activity</b>\n"]
     medals = ["🥇", "🥈", "🥉"]
-    for i, u in enumerate(users):
+    for i, (u, msgs, tokens) in enumerate(rows):
         rank = medals[i] if i < 3 else f"{i + 1}."
         uname = f"@{u.username}" if u.username else u.full_name
-        lines.append(f"{rank} {uname} — {u.message_count} msgs · {u.total_tokens:,} tok")
+        lines.append(f"{rank} {uname} — {msgs} msgs · {tokens:,} tok")
     await call.message.answer("\n".join(lines))
 
 
@@ -151,16 +151,19 @@ async def cmd_unban(message: TgMessage):
     await message.answer("✅ Unbanned." if ok else "User not found.")
 
 
-def _user_card(u) -> str:
+async def _user_card(session, u) -> str:
+    model = await crud.get_current_model(session, u)
+    usage = await crud.user_usage(session, u.id)
     return (
         f"👤 <b>{u.full_name}</b>\n"
         f"ID: <code>{u.telegram_id}</code>\n"
         f"Username: @{u.username or '—'}\n"
         f"Phone: {u.phone_number or '—'}\n"
         f"Lang: {u.language_code or '—'} · Premium: {u.is_premium}\n"
-        f"Model: {u.selected_model}\n"
-        f"Messages: {u.message_count} · Images: {u.image_count}\n"
-        f"Tokens: {u.total_tokens:,} (in {u.prompt_tokens:,} / out {u.completion_tokens:,})\n"
+        f"Model: {model}\n"
+        f"Messages: {usage['messages']} · Images: {usage['images']}\n"
+        f"Tokens: {usage['total_tokens']:,} "
+        f"(in {usage['prompt_tokens']:,} / out {usage['completion_tokens']:,})\n"
         f"Banned: {u.is_banned} · Admin: {u.is_admin}\n"
         f"Joined: {u.created_at:%Y-%m-%d %H:%M} · Last seen: {u.last_active:%Y-%m-%d %H:%M}"
     )
@@ -173,9 +176,10 @@ async def cmd_user(message: TgMessage):
         return await message.answer("Usage: <code>/user &lt;telegram_id&gt;</code>")
     async with SessionLocal() as session:
         u = await crud.get_user_by_telegram_id(session, int(parts[1]))
-    if not u:
-        return await message.answer("User not found.")
-    await message.answer(_user_card(u), reply_markup=kb.admin_user_kb(u.telegram_id, u.is_banned))
+        if not u:
+            return await message.answer("User not found.")
+        card = await _user_card(session, u)
+    await message.answer(card, reply_markup=kb.admin_user_kb(u.telegram_id, u.is_banned))
 
 
 @router.message(Command("find"))
@@ -185,9 +189,10 @@ async def cmd_find(message: TgMessage):
         return await message.answer("Usage: <code>/find &lt;username&gt;</code>")
     async with SessionLocal() as session:
         u = await crud.find_user_by_username(session, parts[1].strip())
-    if not u:
-        return await message.answer("No user with that username.")
-    await message.answer(_user_card(u), reply_markup=kb.admin_user_kb(u.telegram_id, u.is_banned))
+        if not u:
+            return await message.answer("No user with that username.")
+        card = await _user_card(session, u)
+    await message.answer(card, reply_markup=kb.admin_user_kb(u.telegram_id, u.is_banned))
 
 
 @router.callback_query(F.data.startswith("adm_ban:"))
@@ -196,9 +201,10 @@ async def cb_ban(call: CallbackQuery):
     async with SessionLocal() as session:
         await crud.set_banned(session, tid, True)
         u = await crud.get_user_by_telegram_id(session, tid)
+        card = await _user_card(session, u) if u else None
     await call.answer("Banned ✅")
     if u:
-        await call.message.edit_text(_user_card(u), reply_markup=kb.admin_user_kb(tid, True))
+        await call.message.edit_text(card, reply_markup=kb.admin_user_kb(tid, True))
 
 
 @router.callback_query(F.data.startswith("adm_unban:"))
@@ -207,6 +213,7 @@ async def cb_unban(call: CallbackQuery):
     async with SessionLocal() as session:
         await crud.set_banned(session, tid, False)
         u = await crud.get_user_by_telegram_id(session, tid)
+        card = await _user_card(session, u) if u else None
     await call.answer("Unbanned ✅")
     if u:
-        await call.message.edit_text(_user_card(u), reply_markup=kb.admin_user_kb(tid, False))
+        await call.message.edit_text(card, reply_markup=kb.admin_user_kb(tid, False))

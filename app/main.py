@@ -18,7 +18,8 @@ from app.api.routes import router as api_router
 from app.bot.admin_handlers import router as bot_admin_router
 from app.bot.bot import bot, dp
 from app.bot.handlers import router as bot_router
-from app.database import init_db
+from app.database import ping
+from app.migrate import run_upgrade
 
 logging.basicConfig(
     level=logging.INFO,
@@ -35,8 +36,8 @@ async def _wait_for_db(retries: int = 30, delay: float = 2.0) -> None:
     last = None
     for attempt in range(1, retries + 1):
         try:
-            await init_db()
-            log.info("Database ready.")
+            await ping()
+            log.info("Database reachable.")
             return
         except Exception as e:  # noqa: BLE001
             last = e
@@ -48,6 +49,7 @@ async def _wait_for_db(retries: int = 30, delay: float = 2.0) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await _wait_for_db()
+    await asyncio.to_thread(run_upgrade)  # apply Alembic migrations to head
 
     me = await bot.get_me()
     log.info("Starting bot @%s …", me.username)
