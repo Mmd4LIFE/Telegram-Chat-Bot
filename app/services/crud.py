@@ -16,6 +16,7 @@ from app.models import (
     User,
     UserMemory,
     UserTag,
+    WebSearch,
 )
 
 
@@ -420,6 +421,21 @@ async def all_user_ids(session: AsyncSession) -> list[int]:
 
 async def log_broadcast(session: AsyncSession, text: str, sent: int, failed: int) -> None:
     session.add(BroadcastLog(text=text, sent_count=sent, failed_count=failed))
+    await session.commit()
+
+
+async def log_web_search(
+    session: AsyncSession, user_id: int, query: str, answer: str | None, sources: list
+) -> None:
+    session.add(
+        WebSearch(
+            user_id=user_id,
+            query=query,
+            answer=answer,
+            sources=sources,
+            result_count=len(sources or []),
+        )
+    )
     await session.commit()
 
 

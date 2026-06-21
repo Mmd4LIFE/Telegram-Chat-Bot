@@ -275,6 +275,29 @@ async def classify_primary_tag(transcript: str) -> str | None:
     return tags[0] if tags else None
 
 
+async def format_lyrics(raw: str) -> str:
+    """Reformat an automatic transcription into clean, line-broken lyrics."""
+    resp = await client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "You are given an automatic transcription of a song. Reformat it "
+                    "into clean lyrics: one natural lyrical line per line, with correct "
+                    "capitalization and light punctuation. Preserve the wording. Remove "
+                    "non-lyric artifacts like 'thanks for watching', 'subscribe', or "
+                    "channel mentions. Output ONLY the lyrics, nothing else."
+                ),
+            },
+            {"role": "user", "content": raw[:6000]},
+        ],
+        temperature=0.2,
+        max_tokens=1500,
+    )
+    return (resp.choices[0].message.content or raw).strip()
+
+
 async def generate_reengagement(
     transcript: str, persona: str | None = None, segment: str | None = None
 ) -> str:

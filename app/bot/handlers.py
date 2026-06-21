@@ -29,6 +29,7 @@ from app.config import settings
 from app.database import SessionLocal
 from app.services import crud, group_crud, vector_service, web_search
 from app.services.lyrics_service import fetch_lyrics
+from app.services.openai_service import format_lyrics
 from app.utils.emoji import extract_emojis
 from app.services.openai_service import (
     IMAGE_MODEL,
@@ -415,7 +416,11 @@ async def on_audio(message: TgMessage):
     if not lyrics:
         transcribed = await _download_and_transcribe(audio.file_id)
         if transcribed:
-            lyrics, source = transcribed, "🎤 AI transcription of the audio"
+            try:
+                lyrics = await format_lyrics(transcribed)
+            except Exception:  # noqa: BLE001
+                lyrics = transcribed
+            source = "🎤 AI transcription of the audio"
 
     if not lyrics:
         return await message.answer(
@@ -424,17 +429,25 @@ async def on_audio(message: TgMessage):
             reply_markup=kb.main_menu(is_admin),
         )
 
+    song = " — ".join(p for p in (title, performer) if p) or "this song"
     head = f"🎵 <b>{html.escape(title or 'Lyrics')}</b>"
     if performer:
         head += f" — {html.escape(performer)}"
     head += f"\n<i>{source}</i>\n\n"
 
+    # Save as TEXT so the lyrics are part of the conversation context — this lets
+    # follow-ups like "translate it to Persian" actually refer to these lyrics.
     async with SessionLocal() as session:
         user = await crud.get_or_create_user(session, message.from_user)
+        conv = await crud.get_active_conversation(session, user)
         await crud.save_message(
-            session, user, "user", f"[music] {performer or ''} - {title or ''}", content_type="voice"
+            session, user, "user", f"Please show the lyrics of the song: {song}",
+            conversation_id=conv.id,
         )
-        await crud.save_message(session, user, "assistant", lyrics, content_type="voice")
+        await crud.save_message(
+            session, user, "assistant", f"Lyrics of {song}:\n\n{lyrics}",
+            model="lyrics", conversation_id=conv.id,
+        )
     await send_long(message.chat.id, head + html.escape(lyrics), reply_markup=kb.main_menu(is_admin))
 
 
@@ -502,6 +515,7 @@ async def _handle_web(message: TgMessage):
         user = await crud.get_or_create_user(session, message.from_user)
         await crud.save_message(session, user, "user", f"[@web] {query}")
         await crud.save_message(session, user, "assistant", answer_text, model="web-search")
+        await crud.log_web_search(session, user.id, query, answer_text, results)
     await send_long(message.chat.id, body, reply_markup=kb.main_menu(is_admin),
                     link_preview_options=LinkPreviewOptions(is_disabled=True))
 

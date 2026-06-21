@@ -11,6 +11,7 @@ from app.models.model_selection import ModelSelection
 from app.models.system import BroadcastLog, Migration
 from app.models.token_audit import TokenAudit
 from app.models.user import User, UserEmojiStat, UserMemory, UserTag
+from app.models.web import WebSearch
 
 __all__ = [
     "User",
@@ -23,6 +24,7 @@ __all__ = [
     "TokenAudit",
     "Group",
     "GroupMessage",
+    "WebSearch",
     "BroadcastLog",
     "Migration",
 ]

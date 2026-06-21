@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-06-21
+
+### Fixed
+- **Lyrics are now part of the conversation context.** They were saved as
+  `voice` content (excluded from context), so a follow-up like "translate it to
+  Persian" had no lyrics to refer to and the model answered about something else.
+  Lyrics are now stored as text within the active conversation.
+- **Nicely formatted lyrics.** Transcribed (Whisper) lyrics are reformatted into
+  clean, line-broken verses with proper capitalization, and obvious artifacts
+  (e.g. "Thanks for watching!") are removed.
+
+### Added
+- `web_searches` log table — every `@web` query is stored with its AI answer and
+  source links (migration `0007`).
+
 ## [0.7.0] - 2026-06-21
 
 ### Added
@@ -164,7 +179,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Telegram ID.
 - Dockerised: `docker compose up -d` (app `:8009`, db `:5439`).
 
-[Unreleased]: https://github.com/Mmd4LIFE/Telegram-Chat-Bot/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/Mmd4LIFE/Telegram-Chat-Bot/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/Mmd4LIFE/Telegram-Chat-Bot/releases/tag/v0.7.1
 [0.7.0]: https://github.com/Mmd4LIFE/Telegram-Chat-Bot/releases/tag/v0.7.0
 [0.6.0]: https://github.com/Mmd4LIFE/Telegram-Chat-Bot/releases/tag/v0.6.0
 [0.5.1]: https://github.com/Mmd4LIFE/Telegram-Chat-Bot/releases/tag/v0.5.1
