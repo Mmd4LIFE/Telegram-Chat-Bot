@@ -12,16 +12,18 @@ All work is best-effort: a failure on one message never affects the group.
 from __future__ import annotations
 
 import os
+import re
 import tempfile
 
 from aiogram import F, Router
 from aiogram.types import ChatMemberUpdated, Message as TgMessage
 
 from app.bot.bot import bot
+from app.bot.formatting import to_telegram_html
 from app.database import SessionLocal
 from app.logger import get_logger
 from app.services import crud, group_crud, vector_service
-from app.services.openai_service import transcribe_voice
+from app.services.openai_service import express_user, transcribe_voice
 from app.utils.emoji import extract_emojis
 
 log = get_logger(__name__)
@@ -32,8 +34,79 @@ router.message.filter(F.chat.type.in_({"group", "supergroup"}))
 
 # Cache chat_id -> internal group id to avoid a DB lookup on every message.
 _group_cache: dict[int, int] = {}
+_bot_username: str | None = None
 
 MAX_TRANSCRIBE_SECONDS = 120  # don't transcribe very long audio (cost control)
+
+
+async def _bot_uname() -> str:
+    global _bot_username
+    if _bot_username is None:
+        _bot_username = (await bot.get_me()).username or ""
+    return _bot_username
+
+
+_LANG_RE = re.compile(r"\bin\s+([A-Za-z؀-ۿ]+)", re.IGNORECASE)
+
+
+async def _try_express(message: TgMessage) -> bool:
+    """Handle: 'Hey @bot, express @user [in <language>]'. Returns True if handled."""
+    text = message.text or ""
+    if "express" not in text.lower():
+        return False
+    botname = await _bot_uname()
+    mentions = re.findall(r"@(\w+)", text)
+    if botname and botname.lower() not in [m.lower() for m in mentions]:
+        return False  # the bot must be addressed
+
+    # Resolve the target: a text_mention (user w/o username) wins, else an @handle.
+    text_mention_user = next(
+        (e.user for e in (message.entities or []) if e.type == "text_mention" and e.user), None
+    )
+    targets = [m for m in mentions if m.lower() != (botname or "").lower()]
+
+    # Requested output language.
+    language = None
+    m = _LANG_RE.search(text)
+    if m:
+        language = m.group(1)
+    if "فارسی" in text or "پارسی" in text:
+        language = "Persian"
+
+    async with SessionLocal() as session:
+        if text_mention_user:
+            target = await crud.get_user_by_telegram_id(session, text_mention_user.id)
+            display = "@" + (text_mention_user.username or text_mention_user.first_name or "user")
+        elif targets:
+            target = await crud.find_user_by_username(session, targets[0])
+            display = "@" + targets[0]
+        else:
+            return False
+        if not target:
+            await bot.send_message(message.chat.id, f"🤔 I don't have any data on {display} yet.")
+            return True
+        display = f"@{target.username}" if target.username else target.full_name
+        profile = await group_crud.user_group_profile(session, target.id)
+
+    if not profile:
+        await bot.send_message(
+            message.chat.id, f"🤷 I haven't seen {display} say much in groups yet."
+        )
+        return True
+
+    await bot.send_chat_action(message.chat.id, "typing")
+    try:
+        expose = await express_user(display, profile, language)
+    except Exception:  # noqa: BLE001
+        log.exception("express generation failed")
+        return True
+    await bot.send_message(message.chat.id, to_telegram_html(expose))
+    if profile.get("sticker_file_id"):
+        try:
+            await bot.send_sticker(message.chat.id, profile["sticker_file_id"])
+        except Exception:  # noqa: BLE001
+            pass
+    return True
 
 
 async def _group_id(chat) -> int:
@@ -109,6 +182,13 @@ def _classify(message: TgMessage):
 async def on_group_message(message: TgMessage):
     if message.from_user is None or message.from_user.is_bot:
         return  # ignore service messages and other bots
+
+    # "Hey @bot, express @user" — handle and skip logging the command itself.
+    try:
+        if message.text and await _try_express(message):
+            return
+    except Exception:  # noqa: BLE001
+        log.exception("express handler error")
 
     try:
         group_id = await _group_id(message.chat)

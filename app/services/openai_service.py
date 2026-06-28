@@ -275,6 +275,39 @@ async def classify_primary_tag(transcript: str) -> str | None:
     return tags[0] if tags else None
 
 
+async def express_user(display_name: str, profile: dict, language: str | None = None) -> str:
+    """Write a short, fun 'expose' of a group member from their group data only."""
+    lang = language or "English"
+    facts: list[str] = [f"Total group messages seen: {profile['total']}"]
+    if profile.get("top_emojis"):
+        facts.append("Most-used emojis: " + " ".join(f"{e}×{c}" for e, c in profile["top_emojis"]))
+    if profile.get("top_words"):
+        facts.append("Favorite words: " + ", ".join(f"{w} ({c})" for w, c in profile["top_words"]))
+    if profile.get("types"):
+        facts.append("Message types: " + ", ".join(f"{k}={v}" for k, v in profile["types"].items()))
+    samples = "\n".join(f"- {s[:160]}" for s in profile.get("samples", [])[:15])
+
+    system = (
+        "You are a witty Telegram group bot. Based ONLY on the group-chat data "
+        f"provided, write a short, FUN, friendly 'expose' of the member {display_name}. "
+        "2-4 sentences. Be playful, warm and a little cheeky — never mean, insulting "
+        "or offensive. Call out their signature emoji, a catchphrase, or a favorite "
+        f"word if any, and one fun observation. Write the ENTIRE reply in {lang}. "
+        "Do not invent facts beyond the data."
+    )
+    resp = await client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": f"Member: {display_name}\nData:\n" + "\n".join(facts)
+             + (f"\n\nSample messages:\n{samples}" if samples else "")},
+        ],
+        temperature=0.9,
+        max_tokens=320,
+    )
+    return (resp.choices[0].message.content or "").strip()
+
+
 async def format_lyrics(raw: str) -> str:
     """Reformat an automatic transcription into clean, line-broken lyrics."""
     resp = await client.chat.completions.create(

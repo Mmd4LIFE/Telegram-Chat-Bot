@@ -1,11 +1,27 @@
 """Database helpers for group logging and emoji statistics."""
 from __future__ import annotations
 
+import re
+from collections import Counter
+
 from sqlalchemy import desc, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Group, GroupMessage, UserEmojiStat
+from app.utils.emoji import extract_emojis
+
+_WORD_RE = re.compile(r"[A-Za-z؀-ۿ']{3,}")
+# Common English + Persian filler words to ignore when finding "favorite words".
+_STOPWORDS = {
+    "the", "and", "you", "for", "that", "this", "with", "have", "not", "are",
+    "was", "but", "all", "your", "what", "just", "like", "can", "out", "get",
+    "his", "her", "they", "them", "from", "there", "here", "yes", "yeah", "ok",
+    "okay", "lol", "haha", "https", "http", "com",
+    "که", "این", "آن", "برای", "هست", "بود", "اما", "یک", "هم", "های", "می",
+    "رو", "تو", "من", "شما", "ما", "اون", "خیلی", "چی", "هاها", "بله", "نه",
+    "با", "از", "به", "در", "را", "و", "یا", "تا", "هر", "بر", "کن", "کرد",
+}
 
 
 async def register_group(session: AsyncSession, chat) -> Group:
@@ -119,6 +135,50 @@ async def favorite_sticker_file_id(session: AsyncSession, user_id: int) -> str |
         .limit(1)
     )
     return result.scalar_one_or_none()
+
+
+async def user_group_profile(session: AsyncSession, user_id: int, sample: int = 400) -> dict | None:
+    """Build a fun profile of a user from their GROUP activity only (never DMs)."""
+    rows = (
+        await session.execute(
+            select(GroupMessage)
+            .where(GroupMessage.user_id == user_id)
+            .order_by(desc(GroupMessage.created_at))
+            .limit(sample)
+        )
+    ).scalars().all()
+    if not rows:
+        return None
+
+    emoji_c: Counter = Counter()
+    word_c: Counter = Counter()
+    types: Counter = Counter()
+    samples: list[str] = []
+    sticker_file = None
+
+    for m in rows:
+        types[m.message_type] += 1
+        for e in extract_emojis(m.emojis):
+            emoji_c[e] += 1
+        if m.sticker_emoji:
+            emoji_c[m.sticker_emoji] += 1
+        content = m.transcription or m.text
+        if content:
+            samples.append(content)
+            for w in _WORD_RE.findall(content.lower()):
+                if w not in _STOPWORDS:
+                    word_c[w] += 1
+        if m.message_type == "sticker" and sticker_file is None:
+            sticker_file = m.file_id
+
+    return {
+        "total": len(rows),
+        "types": dict(types),
+        "top_emojis": emoji_c.most_common(5),
+        "top_words": word_c.most_common(8),
+        "samples": samples[:25],
+        "sticker_file_id": sticker_file,
+    }
 
 
 async def group_stats(session: AsyncSession) -> dict:

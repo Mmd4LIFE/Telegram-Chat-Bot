@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-06-25
+
+### Added
+- **Group "expose" command.** In a group, send `Hey @bot, express @username`
+  (optionally `... in Persian` / any language) and the bot writes a fun, friendly
+  profile of that member built **only from their group activity** — most-used
+  emoji, favourite words/catchphrase, message-type breakdown and a fun fact. It
+  may also echo back the member's own favourite sticker. No DM/private data is
+  ever used.
+
 ## [0.7.1] - 2026-06-21
 
 ### Fixed
@@ -179,7 +189,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Telegram ID.
 - Dockerised: `docker compose up -d` (app `:8009`, db `:5439`).
 
-[Unreleased]: https://github.com/Mmd4LIFE/Telegram-Chat-Bot/compare/v0.7.1...HEAD
+[Unreleased]: https://github.com/Mmd4LIFE/Telegram-Chat-Bot/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/Mmd4LIFE/Telegram-Chat-Bot/releases/tag/v0.8.0
 [0.7.1]: https://github.com/Mmd4LIFE/Telegram-Chat-Bot/releases/tag/v0.7.1
 [0.7.0]: https://github.com/Mmd4LIFE/Telegram-Chat-Bot/releases/tag/v0.7.0
 [0.6.0]: https://github.com/Mmd4LIFE/Telegram-Chat-Bot/releases/tag/v0.6.0
